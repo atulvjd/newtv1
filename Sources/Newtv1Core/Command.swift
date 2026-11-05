@@ -75,6 +75,7 @@ public struct CommandParser {
         var remaining = text
         while true {
             let literal = ["type ", "write ", "dictate ", "shell ", "search for ", "search "].contains { remaining.lowercased().hasPrefix($0) }
+            if !literal, remaining.lowercased().hasSuffix(" then") { throw CommandError.invalid("Add a command after “then”.") }
             if !literal, let separator = remaining.range(of: " then ", options: .caseInsensitive) {
                 pieces.append(String(remaining[..<separator.lowerBound]))
                 remaining = String(remaining[separator.upperBound...]).trimmingCharacters(in: .whitespaces)
@@ -233,7 +234,7 @@ public struct ModelPlan: Decodable {
     public let commands: [String]
     public let explanation: String
     public func validated(transcript: String, workflows: [Workflow]) throws -> CommandPlan {
-        guard !commands.isEmpty, commands.count <= 20, commands.allSatisfy({ $0.count <= 4000 }) else { throw CommandError.invalid("The local model did not return a supported plan. Try a more specific command.") }
+        guard !commands.isEmpty, commands.count <= 20, commands.allSatisfy({ $0.count <= 4000 }) else { throw CommandError.invalid("The model did not return a supported plan. Try a more specific command.") }
         var actions: [Action] = []
         for command in commands { actions += try CommandParser().parse(command).actions }
         let expanded = try WorkflowResolver().expand(CommandPlan(transcript: transcript, actions: actions, requiresReview: true), workflows: workflows)

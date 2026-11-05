@@ -1,5 +1,5 @@
 import Foundation
-import VoxCore
+import Newtv1Core
 
 // Dependency-free regression runner so the suite also runs with Command Line Tools,
 // which do not ship XCTest. Every failed assertion contributes to a nonzero exit.
@@ -61,7 +61,7 @@ final class CommandTests {
     }
 
     func testEmptyAndUnknown() {
-        for value in ["", "   ", "destroy everything", "open ", "open Safari then "] { XCTAssertThrowsError(try parser.parse(value)) }
+        for value in ["", "   ", "destroy everything", "open ", "open Safari then "] { XCTAssertThrowsError(try parser.parse(value), value) }
     }
 
     func testURLsAndApps() throws {
@@ -140,6 +140,16 @@ final class CommandTests {
         let model = try JSONDecoder().decode(ModelPlan.self, from: Data(#"{"commands":[],"explanation":"Unsupported"}"#.utf8))
         XCTAssertThrowsError(try model.validated(transcript: "test", workflows: []))
     }
+
+    func testRenamedWakePhrase() {
+        for phrase in ["Newtv1, open Safari", "New TV One open Safari", "Hey New TV 1, open Safari", "newtv one: open Safari"] {
+            XCTAssertEqual(VoiceCommand.extract(phrase, requireWakePhrase: true), "open Safari")
+        }
+        XCTAssertEqual(VoiceCommand.extract("open Safari", requireWakePhrase: true), nil)
+        XCTAssertEqual(VoiceCommand.extract("tell New TV One open Safari", requireWakePhrase: true), nil)
+        XCTAssertEqual(VoiceCommand.extract("open Safari", requireWakePhrase: false), "open Safari")
+        XCTAssertEqual(VoiceCommand.extract("New TV One, type Hello", requireWakePhrase: false), "type Hello")
+    }
 }
 
 @main
@@ -165,7 +175,8 @@ struct CoreChecks {
             ("workflow persistence encoding", suite.testWorkflowCodableRoundTrip),
             ("model review requirement", suite.testModelPlansAlwaysRequireReview),
             ("model shell rejection", suite.testModelsCannotGenerateShellDirectlyOrViaWorkflow),
-            ("empty model plan", suite.testEmptyModelPlanIsRejected)
+            ("empty model plan", suite.testEmptyModelPlanIsRejected),
+            ("Newtv1 spoken wake phrase", suite.testRenamedWakePhrase)
         ]
         for (name, test) in cases {
             let before = failures.count

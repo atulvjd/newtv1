@@ -2,12 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "Vox",
+    name: "Newtv1",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "Vox", targets: ["Vox"])],
+    products: [.executable(name: "Newtv1", targets: ["Newtv1"])],
     targets: [
-        .target(name: "VoxCore"),
-        .executableTarget(name: "Vox", dependencies: ["VoxCore"]),
-        .executableTarget(name: "VoxCoreChecks", dependencies: ["VoxCore"], path: "Tests/VoxCoreTests")
+        .target(name: "Newtv1Core"),
+        .executableTarget(name: "Newtv1", dependencies: ["Newtv1Core"]),
+        .executableTarget(name: "Newtv1Setup", dependencies: ["Newtv1Core"]),
+        .executableTarget(name: "Newtv1CoreChecks", dependencies: ["Newtv1Core"], path: "Tests/Newtv1CoreTests")
     ]
 )

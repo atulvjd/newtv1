@@ -1,5 +1,5 @@
 import SwiftUI
-import VoxCore
+import Newtv1Core
 
 // Explicitly reference the property wrapper type: newer SDKs also export a State macro.
 private typealias ViewState<Value> = SwiftUI.State<Value>
@@ -13,6 +13,8 @@ struct ContentView: View {
     @ObservedObject var speech: SpeechController
     @ViewState private var newWorkflow = false
     @ViewState private var editingWorkflow: Workflow?
+    @ViewState private var apiKey = ""
+    @ViewState private var keyMessage: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -32,6 +34,7 @@ struct ContentView: View {
                         }
                         switch model.page {
                         case .control: commandCenter
+                        case .brain: brain
                         case .workflows: workflows
                         case .guide: guide
                         case .settings: settings
@@ -43,6 +46,10 @@ struct ContentView: View {
         }
         .background(Color(red: 0.043, green: 0.047, blue: 0.058))
         .tint(accent)
+        .environment(\.openURL, OpenURLAction { url in
+            guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return .discarded }
+            return .systemAction
+        })
         .sheet(item: $model.pending) { plan in confirmation(plan) }
         .sheet(isPresented: $newWorkflow) { WorkflowEditor(model: model, workflow: nil) }
         .sheet(item: $editingWorkflow) { workflow in WorkflowEditor(model: model, workflow: workflow) }
@@ -52,7 +59,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "waveform").font(.system(size: 26, weight: .bold)).foregroundStyle(accent)
-                Text("vox").font(.system(size: 32, weight: .bold, design: .rounded)).tracking(-2)
+                Text("Newtv1").font(.system(size: 23, weight: .bold, design: .rounded)).tracking(-1)
                 Text("LOCAL").font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1).foregroundStyle(muted).padding(.horizontal, 5).padding(.vertical, 4).overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.12)))
             }.padding(.top, 38).padding(.bottom, 42).padding(.horizontal, 24)
             Text("WORKSPACE").font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(muted).padding(.horizontal, 25).padding(.bottom, 14)
@@ -60,7 +67,7 @@ struct ContentView: View {
                 Button { model.page = page } label: {
                     HStack(spacing: 12) {
                         Image(systemName: page.icon).frame(width: 18)
-                        Text(page.rawValue).font(.system(size: 13, weight: .medium))
+                        Text(page.rawValue).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         Spacer()
                         if page == model.page { Circle().fill(accent).frame(width: 5, height: 5) }
                     }.foregroundStyle(page == model.page ? accent : Color.white.opacity(0.56)).padding(.horizontal, 14).padding(.vertical, 13)
@@ -74,7 +81,7 @@ struct ContentView: View {
                 HStack { Text("⌥"); Text("space") }.font(.system(size: 11, design: .monospaced)).foregroundStyle(muted).padding(7).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.1)))
                 Text("Toggle voice from any app").font(.system(size: 10)).foregroundStyle(muted)
             }.padding(19).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 12)).padding(14)
-            HStack { Text("VOX FOR macOS"); Spacer(); Text("v0.1") }.font(.system(size: 9, design: .monospaced)).foregroundStyle(muted.opacity(0.7)).padding(22)
+            HStack { Text("NEWTV1 FOR macOS"); Spacer(); Text("v0.2") }.font(.system(size: 9, design: .monospaced)).foregroundStyle(muted.opacity(0.7)).padding(22)
         }.background(Color.white.opacity(0.012))
     }
 
@@ -92,7 +99,7 @@ struct ContentView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Less clicking. More doing.").font(.system(size: 30, weight: .semibold)).tracking(-1)
-                    Text("Speak your next move. Vox takes it from here.").font(.system(size: 13)).foregroundStyle(muted)
+                    Text("Speak your next move. Newtv1 takes it from here.").font(.system(size: 13)).foregroundStyle(muted)
                 }
                 Spacer()
                 Label(speech.isListening ? "Listening" : "Standby", systemImage: "circle.fill").font(.system(size: 10, weight: .medium)).foregroundStyle(speech.isListening ? accent : muted).padding(.horizontal, 12).padding(.vertical, 8).background(Color.white.opacity(0.04), in: Capsule())
@@ -107,7 +114,7 @@ struct ContentView: View {
                     VoiceOrb(active: speech.isListening, level: speech.level).frame(width: 180, height: 180)
                     VStack(alignment: .leading, spacing: 13) {
                         Text(model.busy ? "Making it happen." : speech.isListening ? "I’m listening." : "Your voice is the shortcut.").font(.system(size: 26, weight: .medium)).tracking(-0.6)
-                        Text(speech.isListening ? (model.wakeWord ? "Start with “Vox”, then say a command." : "Say a command, then pause to execute.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
+                        Text(speech.isListening ? (model.wakeWord ? "Start with “Newtv1”, then say a command." : "Say a command, then pause to execute.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
                             .font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 12) {
                             Button { model.toggleListening() } label: {
@@ -120,7 +127,7 @@ struct ContentView: View {
                 }.padding(.horizontal, 20).padding(.bottom, 24)
                 HStack(spacing: 10) {
                     Image(systemName: "quote.bubble").foregroundStyle(accent.opacity(0.65))
-                    Text(speech.transcript.isEmpty ? "Try “Vox, open Safari then left half”" : speech.transcript).font(.system(size: 12)).foregroundStyle(speech.transcript.isEmpty ? muted : .white).lineLimit(2)
+                    Text(speech.transcript.isEmpty ? "Try “Newtv1, open Safari then left half”" : speech.transcript).font(.system(size: 12)).foregroundStyle(speech.transcript.isEmpty ? muted : .white).lineLimit(2)
                     Spacer()
                     if speech.isListening { WaveMeter(level: speech.level) }
                 }.padding(17).background(Color.black.opacity(0.14))
@@ -170,12 +177,12 @@ struct ContentView: View {
 
     private var workflows: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack { title("One phrase. A whole routine.", "Build sequences you can run with “Vox, run focus mode”."); Spacer(); Button { newWorkflow = true } label: { Label("New workflow", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
+            HStack { title("One phrase. A whole routine.", "Build sequences you can run with “Newtv1, run focus mode”."); Spacer(); Button { newWorkflow = true } label: { Label("New workflow", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
             ForEach(model.workflows) { workflow in
                 VStack(alignment: .leading, spacing: 14) {
                     HStack { Image(systemName: "square.stack.3d.up.fill").foregroundStyle(accent); Text(workflow.name).font(.system(size: 18, weight: .medium)); Spacer(); Button("Edit") { editingWorkflow = workflow }.buttonStyle(.bordered); Button { model.submit("run \(workflow.name)") } label: { Label("Run", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(model.busy) }
                     Text(workflow.commands).font(.system(size: 12, design: .monospaced)).foregroundStyle(muted).lineSpacing(6).textSelection(.enabled)
-                    HStack { Text("SAY “VOX, RUN \(workflow.name.uppercased())”").font(.system(size: 9, design: .monospaced)).foregroundStyle(accent.opacity(0.7)); Spacer(); Button(role: .destructive) { model.workflows.removeAll { $0.id == workflow.id } } label: { Image(systemName: "trash") }.buttonStyle(.plain).help("Delete workflow") }
+                    HStack { Text("SAY “NEWTV1, RUN \(workflow.name.uppercased())”").font(.system(size: 9, design: .monospaced)).foregroundStyle(accent.opacity(0.7)); Spacer(); Button(role: .destructive) { model.workflows.removeAll { $0.id == workflow.id } } label: { Image(systemName: "trash") }.buttonStyle(.plain).help("Delete workflow") }
                 }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             }
             if model.workflows.isEmpty { Text("Create your first workflow to combine commands into a routine.").foregroundStyle(muted) }
@@ -183,9 +190,36 @@ struct ContentView: View {
         }
     }
 
+    private var brain: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            title("A little more brainpower.", "Ask a question, look something up, or describe what you want your Mac to do.")
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles").foregroundStyle(accent)
+                TextField("Ask anything…", text: $model.input).textFieldStyle(.plain).onSubmit { model.requestBrain(model.input, mode: .answer) }.disabled(model.busy)
+                if model.busy { Button("Stop") { model.stop() }.buttonStyle(.plain).foregroundStyle(.orange) }
+                else {
+                    Button("Search web") { model.requestBrain(model.input, mode: .search) }.buttonStyle(.bordered).disabled(!model.allowWebSearch)
+                    Button("Ask") { model.requestBrain(model.input, mode: .answer) }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                }
+            }.padding(16).background(surface, in: RoundedRectangle(cornerRadius: 12))
+            if !model.keyConfigured { Button("Connect OpenAI in Settings") { model.page = .settings }.buttonStyle(.bordered) }
+            if model.brainAnswers.isEmpty {
+                Text("Try “ask why the sky is blue” or “research the latest Mac news” in the command center. Voice works too: “New TV One, ask …”. Answers stay in memory for this session.").font(.system(size: 13)).foregroundStyle(muted).lineSpacing(5)
+            }
+            ForEach(model.brainAnswers) { answer in
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(answer.question).font(.system(size: 17, weight: .medium)).textSelection(.enabled)
+                    Divider()
+                    Text((try? AttributedString(markdown: answer.markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(answer.markdown))
+                        .font(.system(size: 13)).lineSpacing(6).textSelection(.enabled).tint(accent)
+                }.padding(22).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+    }
+
     private var guide: some View {
         VStack(alignment: .leading, spacing: 22) {
-            title("A few words go a long way.", "Use these phrases as written. Add “Vox” first when wake phrase mode is on.")
+            title("A few words go a long way.", "Use these phrases as written. Add “Newtv1” first when wake phrase mode is on.")
             ForEach(Array(commandGroups.enumerated()), id: \.offset) { _, group in
                 VStack(alignment: .leading, spacing: 14) {
                     Text(group.0).font(.system(size: 16, weight: .medium))
@@ -198,7 +232,20 @@ struct ContentView: View {
 
     private var settings: some View {
         VStack(alignment: .leading, spacing: 22) {
-            title("Set up your command space.", "macOS permissions keep you in charge of what Vox can do.")
+            title("Set up your command space.", "macOS permissions keep you in charge of what Newtv1 can do.")
+            VStack(alignment: .leading, spacing: 18) {
+                HStack { Label("OpenAI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
+                Toggle("Use OpenAI for questions and natural-language actions", isOn: $model.useOpenAI).toggleStyle(.switch).disabled(!model.keyConfigured)
+                Toggle("Allow web search for answers", isOn: $model.allowWebSearch).toggleStyle(.switch)
+                HStack { Text("Model").font(.system(size: 12)); TextField("gpt-5.4-mini", text: $model.openAIModel).textFieldStyle(.roundedBorder) }
+                HStack {
+                    SecureField(model.keyConfigured ? "Replace API key…" : "OpenAI API key…", text: $apiKey).textFieldStyle(.roundedBorder)
+                    Button("Save to Keychain") { do { try model.saveOpenAIKey(apiKey); apiKey = ""; keyMessage = "Key saved securely." } catch { apiKey = ""; keyMessage = error.localizedDescription } }.buttonStyle(.bordered).disabled(apiKey.isEmpty)
+                    if model.keyConfigured { Button("Remove key") { do { try model.removeOpenAIKey(); keyMessage = "Key removed." } catch { keyMessage = error.localizedDescription } }.buttonStyle(.bordered) }
+                }
+                if let keyMessage { Text(keyMessage).font(.system(size: 11)).foregroundStyle(muted) }
+                Text("Questions and searches are sent to OpenAI; action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API requests and web searches use your API credits. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
+            }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(spacing: 0) {
                 permissionRow("Accessibility", "Click controls, type, send shortcuts, and move windows.", model.accessibility) { model.requestAccessibility() }
                 Divider().overlay(Color.white.opacity(0.04))
@@ -209,19 +256,19 @@ struct ContentView: View {
                 HStack { VStack(alignment: .leading, spacing: 5) { Text("Screen Recording").font(.system(size: 13, weight: .medium)); Text("Only needed for the screenshot command.").font(.system(size: 11)).foregroundStyle(muted) }; Spacer(); Button("Open settings") { model.openPrivacy("ScreenCapture") }.buttonStyle(.bordered) }.padding(20)
             }.background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 22) {
-                Toggle(isOn: $model.wakeWord) { VStack(alignment: .leading, spacing: 5) { Text("Require “Vox” before each command").font(.system(size: 13, weight: .medium)); Text("Only commands beginning with “Vox” or “Hey Vox” are accepted.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
+                Toggle(isOn: $model.wakeWord) { VStack(alignment: .leading, spacing: 5) { Text("Require “New TV One” before each command").font(.system(size: 13, weight: .medium)); Text("Say “New TV One” or “Hey New TV One”. The transcript may also spell it Newtv1.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
                 Divider()
                 Toggle(isOn: $model.allowNetwork) { VStack(alignment: .leading, spacing: 5) { Text("Allow Apple network speech recognition").font(.system(size: 13, weight: .medium)); Text("Off by default. Turning this on may send audio to Apple. Changing it stops listening.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 18) {
                 Toggle(isOn: $model.useLocalPlanner) { VStack(alignment: .leading, spacing: 5) { Text("Natural language with Ollama").font(.system(size: 13, weight: .medium)); Text("Send unrecognized requests to your local Ollama server. Every generated plan requires an on-screen review.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
                 HStack { Text("Installed model").font(.system(size: 12)); TextField("Your local model name", text: $model.localModel).textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced)) }
-                Text("Requires Ollama running at 127.0.0.1:11434 with a downloaded local model. Vox sends the request, target app name, and workflow names. The model cannot see your screen. AI-generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
+                Text("Requires Ollama running at 127.0.0.1:11434 with a downloaded local model. Newtv1 sends the request, target app name, and workflow names. The model cannot see your screen. AI-generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 10) {
                 Label("Local by default", systemImage: "lock.shield").font(.system(size: 14, weight: .medium)).foregroundStyle(accent)
-                Text("No account or API key. Command parsing and workflows run locally. Recognition requires on-device support unless you enable network recognition above. Recent activity stays in memory; workflows and settings are saved on this Mac.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
-                Text("Stop with ⌘. in Vox, the menu bar Stop action, or “Vox, stop”. Already completed actions cannot be undone automatically. Shell tasks run as your user, time out after 30 seconds, and must be reviewed on screen.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
+                Text("Direct commands and workflows run locally. The optional OpenAI brain uses your API key, stored in macOS Keychain. Recognition requires on-device support unless you enable Apple network recognition above. Recent activity and answers stay in memory; workflows and settings are saved on this Mac.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
+                Text("Stop with ⌘. in Newtv1, the menu bar Stop action, or “Newtv1, stop”. Already completed actions cannot be undone automatically. Shell tasks run as your user, time out after 30 seconds, and must be reviewed on screen.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
         }
     }
@@ -264,7 +311,7 @@ extension CommandPlan: Identifiable { public var id: String { transcript } }
 private let commandGroups: [(String, [String])] = [
     ("Apps & the web", ["open Safari", "switch to Notes", "quit Safari", "go to apple.com", "search for macOS accessibility"]),
     ("Controls & navigation", ["show numbers", "click twelve", "click Save", "hide numbers", "scroll down 5", "scroll right 3"]),
-    ("Typing & shortcuts", ["type Hello from Vox", "press command shift s", "press return", "copy", "paste", "undo", "new tab", "close tab", "next tab", "go back"]),
+    ("Typing & shortcuts", ["type Hello from Newtv1", "press command shift s", "press return", "copy", "paste", "undo", "new tab", "close tab", "next tab", "go back"]),
     ("Windows", ["left half", "right half", "top half", "bottom half", "maximize window", "center window", "minimize window"]),
     ("Mac & files", ["volume fifty", "mute", "unmute", "take a screenshot", "reveal downloads", "reveal ~/Documents", "lock screen", "sleep my mac"]),
     ("Sequences & power commands", ["open Safari then left half", "run focus mode", "wait 2 seconds", "shell pwd"])

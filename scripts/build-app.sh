@@ -8,14 +8,16 @@ if [[ "$configuration" != "release" && "$configuration" != "debug" ]]; then
 fi
 swift build -c "$configuration" --scratch-path .build
 binary_dir="$(swift build -c "$configuration" --scratch-path .build --show-bin-path)"
-app="dist/Vox.app"
+"$binary_dir/Newtv1CoreChecks"
+app="dist/Newtv1.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$binary_dir/Vox" "$app/Contents/MacOS/Vox"
+cp "$binary_dir/Newtv1" "$app/Contents/MacOS/Newtv1.next"
+mv -f "$app/Contents/MacOS/Newtv1.next" "$app/Contents/MacOS/Newtv1"
 cp Resources/Info.plist "$app/Contents/Info.plist"
-swift scripts/make-icon.swift "$app/Contents/Resources/Vox.icns"
-if [[ -n "${VOX_SIGN_IDENTITY:-}" ]]; then
-    codesign --force --options runtime --sign "$VOX_SIGN_IDENTITY" --entitlements Resources/Vox.entitlements "$app"
+swift scripts/make-icon.swift "$app/Contents/Resources/Newtv1.icns"
+if [[ -n "${NEWTV1_SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --sign "$NEWTV1_SIGN_IDENTITY" --entitlements Resources/Newtv1.entitlements "$app"
 else
-    codesign --force --sign - --entitlements Resources/Vox.entitlements "$app"
+    codesign --force --sign - --entitlements Resources/Newtv1.entitlements "$app"
 fi
 echo "Built $PWD/$app"

@@ -1,9 +1,9 @@
 import AppKit
 import ApplicationServices
 import Carbon
-import VoxCore
+import Newtv1Core
 
-struct VoxFailure: LocalizedError {
+struct Newtv1Failure: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
@@ -43,7 +43,7 @@ final class ProcessRunner: @unchecked Sendable {
                         try? reader?.close()
                         let result = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                         if process.terminationStatus == 0 { continuation.resume(returning: result) }
-                        else { continuation.resume(throwing: VoxFailure(result.isEmpty ? "Command stopped or failed (\(process.terminationStatus))." : result)) }
+                        else { continuation.resume(throwing: Newtv1Failure(result.isEmpty ? "Command stopped or failed (\(process.terminationStatus))." : result)) }
                     }
                     try self.launch(task)
                     DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
@@ -94,19 +94,19 @@ final class Automation {
     }
 
     func requireAccessibility() throws {
-        guard trusted else { throw VoxFailure("Enable Vox in System Settings → Privacy & Security → Accessibility, then try again.") }
+        guard trusted else { throw Newtv1Failure("Enable Newtv1 in System Settings → Privacy & Security → Accessibility, then try again.") }
     }
 
     func focusTarget() async throws {
         guard let targetApp, !targetApp.isTerminated, targetApp.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            throw VoxFailure("Switch to the app you want to control first, then use Option–Space to speak.")
+            throw Newtv1Failure("Switch to the app you want to control first, then use Option–Space to speak.")
         }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != targetApp.processIdentifier {
             targetApp.activate(options: [.activateIgnoringOtherApps])
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier else {
-            throw VoxFailure("Could not focus \(targetApp.localizedName ?? "the target app").")
+            throw Newtv1Failure("Could not focus \(targetApp.localizedName ?? "the target app").")
         }
     }
 
@@ -119,19 +119,19 @@ final class Automation {
             if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { targetApp = front }
         case .quitApp(let name):
             let matches = NSWorkspace.shared.runningApplications.filter { $0.localizedName?.localizedCaseInsensitiveCompare(name) == .orderedSame }
-            guard matches.count == 1, let app = matches.first else { throw VoxFailure("Could not uniquely find running app “\(name)”.") }
-            guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { throw VoxFailure("Use Vox’s menu to quit Vox.") }
-            guard app.terminate() else { throw VoxFailure("The app declined to quit. Check it for an unsaved document dialog.") }
+            guard matches.count == 1, let app = matches.first else { throw Newtv1Failure("Could not uniquely find running app “\(name)”.") }
+            guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { throw Newtv1Failure("Use Newtv1’s menu to quit Newtv1.") }
+            guard app.terminate() else { throw Newtv1Failure("The app declined to quit. Check it for an unsaved document dialog.") }
         case .openURL(let raw):
             let value = raw.contains("://") ? raw : "https://\(raw)"
-            guard let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty else { throw VoxFailure("Use a valid http or https address.") }
-            guard NSWorkspace.shared.open(url) else { throw VoxFailure("Could not open that address.") }
+            guard let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty else { throw Newtv1Failure("Use a valid http or https address.") }
+            guard NSWorkspace.shared.open(url) else { throw Newtv1Failure("Could not open that address.") }
             try await Task.sleep(nanoseconds: 350_000_000)
             targetApp = NSWorkspace.shared.frontmostApplication
         case .search(let query):
             var url = URLComponents(string: "https://www.google.com/search")!
             url.queryItems = [URLQueryItem(name: "q", value: query)]
-            guard let destination = url.url, NSWorkspace.shared.open(destination) else { throw VoxFailure("Could not open search.") }
+            guard let destination = url.url, NSWorkspace.shared.open(destination) else { throw Newtv1Failure("Could not open search.") }
             try await Task.sleep(nanoseconds: 350_000_000)
             targetApp = NSWorkspace.shared.frontmostApplication
         case .typeText(let text):
@@ -146,7 +146,7 @@ final class Automation {
             for chunk in chunks where !chunk.isEmpty {
                 try Task.checkCancellation()
                 guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                      let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { throw VoxFailure("Cannot create keyboard event.") }
+                      let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { throw Newtv1Failure("Cannot create keyboard event.") }
                 chunk.withUnsafeBufferPointer { buffer in
                     down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buffer.baseAddress!)
                     up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buffer.baseAddress!)
@@ -163,7 +163,11 @@ final class Automation {
         case .hideNumbers: hideNumbers()
         case .clickNumber(let number):
             try requireAccessibility(); try await focusTarget()
-            guard numberedPID == targetApp?.processIdentifier, let target = targets.first(where: { $0.id == number }) else { throw VoxFailure("Say “show numbers” in this app first.") }
+            guard numberedPID == targetApp?.processIdentifier, let target = targets.first(where: { $0.id == number }) else { throw Newtv1Failure("Say “show numbers” in this app first.") }
+            guard try scanControls().contains(where: { CFEqual($0.element, target.element) }) else {
+                hideNumbers()
+                throw Newtv1Failure("That control is no longer visible in the focused window. Show numbers again.")
+            }
             try click(target.element); hideNumbers()
         case .click(let label):
             try requireAccessibility(); try await focusTarget()
@@ -171,14 +175,14 @@ final class Automation {
             let exact = all.filter { $0.label.localizedCaseInsensitiveCompare(label) == .orderedSame }
             let matches = exact.isEmpty ? all.filter { $0.label.localizedCaseInsensitiveContains(label) } : exact
             guard matches.count == 1, let target = matches.first else {
-                throw VoxFailure(matches.isEmpty ? "No accessible control named “\(label)”. Try “show numbers”." : "More than one control matches “\(label)”. Use “show numbers” to choose.")
+                throw Newtv1Failure(matches.isEmpty ? "No accessible control named “\(label)”. Try “show numbers”." : "More than one control matches “\(label)”. Use “show numbers” to choose.")
             }
             try click(target.element); hideNumbers()
         case .scroll(let direction, let amount):
             try requireAccessibility(); try await focusTarget()
             let vertical = direction == "up" ? amount : direction == "down" ? -amount : 0
             let horizontal = direction == "left" ? amount : direction == "right" ? -amount : 0
-            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(vertical), wheel2: Int32(horizontal), wheel3: 0) else { throw VoxFailure("Cannot create scroll event.") }
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(vertical), wheel2: Int32(horizontal), wheel3: 0) else { throw Newtv1Failure("Cannot create scroll event.") }
             event.post(tap: .cghidEventTap)
         case .window(let position):
             try requireAccessibility(); try await focusTarget(); try moveWindow(position)
@@ -187,10 +191,10 @@ final class Automation {
         case .screenshot:
             guard CGPreflightScreenCaptureAccess() else {
                 CGRequestScreenCaptureAccess()
-                throw VoxFailure("Enable Screen Recording for Vox in System Settings, then retry the screenshot.")
+                throw Newtv1Failure("Enable Screen Recording for Newtv1 in System Settings, then retry the screenshot.")
             }
             let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-            let file = desktop.appendingPathComponent("Vox-\(Int(Date().timeIntervalSince1970)).png")
+            let file = desktop.appendingPathComponent("Newtv1-\(Int(Date().timeIntervalSince1970)).png")
             _ = try await runner.run("/usr/sbin/screencapture", ["-x", file.path])
             return "Saved \(file.lastPathComponent) to Desktop."
         case .lock: try press("control command q")
@@ -198,13 +202,13 @@ final class Automation {
         case .reveal(let raw):
             let aliases: [String: String] = ["downloads": "~/Downloads", "desktop": "~/Desktop", "documents": "~/Documents", "home": "~"]
             let path = NSString(string: aliases[raw.lowercased()] ?? raw).expandingTildeInPath
-            guard FileManager.default.fileExists(atPath: path) else { throw VoxFailure("That path does not exist: \(path)") }
+            guard FileManager.default.fileExists(atPath: path) else { throw Newtv1Failure("That path does not exist: \(path)") }
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case .shell(let command):
             let output = try await runner.run("/bin/zsh", ["-c", command])
             return output.isEmpty ? "Shell command completed." : output
         case .wait(let seconds): try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-        case .workflow: throw VoxFailure("Workflow was not expanded.")
+        case .workflow: throw Newtv1Failure("Workflow was not expanded.")
         }
         return action.summary
     }
@@ -221,19 +225,19 @@ final class Automation {
             case "option", "alt": flags.insert(.maskAlternate)
             case "control", "ctrl": flags.insert(.maskControl)
             default:
-                guard key == nil else { throw VoxFailure("Use one key with optional command, shift, option, or control modifiers.") }
+                guard key == nil else { throw Newtv1Failure("Use one key with optional command, shift, option, or control modifiers.") }
                 key = part
             }
         }
         let codes: [String: CGKeyCode] = ["a":0,"s":1,"d":2,"f":3,"h":4,"g":5,"z":6,"x":7,"c":8,"v":9,"b":11,"q":12,"w":13,"e":14,"r":15,"y":16,"t":17,"1":18,"2":19,"3":20,"4":21,"6":22,"5":23,"=":24,"9":25,"7":26,"-":27,"8":28,"0":29,
             "]":30,"o":31,"u":32,"[":33,"i":34,"p":35,"return":36,"enter":36,"l":37,"j":38,"'":39,"k":40,";":41,"\\":42,",":43,"/":44,"n":45,"m":46,".":47,"tab":48,"space":49,"`":50,"delete":51,"escape":53,"esc":53,"left":123,"right":124,"down":125,"up":126,"home":115,"end":119,"pageup":116,"pagedown":121,"forwarddelete":117,"f1":122,"f2":120,"f3":99,"f4":118,"f5":96,"f6":97,"f7":98,"f8":100,"f9":101,"f10":109,"f11":103,"f12":111]
-        guard let key, let code = codes[key], let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true), let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { throw VoxFailure("Unknown key. Try “press command shift s” or “press return”.") }
+        guard let key, let code = codes[key], let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true), let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { throw Newtv1Failure("Unknown key. Try “press command shift s” or “press return”.") }
         down.flags = flags; up.flags = flags
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     }
 
     private func appElement() throws -> AXUIElement {
-        guard let app = targetApp, !app.isTerminated else { throw VoxFailure("No target app. Switch to an app first.") }
+        guard let app = targetApp, !app.isTerminated else { throw Newtv1Failure("No target app. Switch to an app first.") }
         let element = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(element, 0.3)
         return element
@@ -254,7 +258,7 @@ final class Automation {
 
     private func scanControls() throws -> [ControlTarget] {
         let app = try appElement()
-        guard let root = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(root) == AXUIElementGetTypeID() else { throw VoxFailure("This app has no accessible focused window.") }
+        guard let root = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(root) == AXUIElementGetTypeID() else { throw Newtv1Failure("This app has no accessible focused window.") }
         var queue: [(AXUIElement, Int)] = [(root as! AXUIElement, 0)]
         var index = 0; var visited = Set<CFHashCode>(); var found: [ControlTarget] = []
         let deadline = Date().addingTimeInterval(2)
@@ -279,9 +283,9 @@ final class Automation {
 
     private func click(_ element: AXUIElement) throws {
         if AXUIElementPerformAction(element, kAXPressAction as CFString) == .success { return }
-        guard let rect = frame(element) else { throw VoxFailure("That control moved or disappeared. Show numbers again.") }
+        guard let rect = frame(element) else { throw Newtv1Failure("That control moved or disappeared. Show numbers again.") }
         let point = CGPoint(x: rect.midX, y: rect.midY)
-        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left), let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { throw VoxFailure("Cannot create mouse event.") }
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left), let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { throw Newtv1Failure("Cannot create mouse event.") }
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     }
 
@@ -289,7 +293,7 @@ final class Automation {
 
     private func showNumbers() throws {
         hideNumbers(); targets = try scanControls()
-        guard !targets.isEmpty else { throw VoxFailure("No accessible controls found. This app may not expose its interface to macOS Accessibility.") }
+        guard !targets.isEmpty else { throw Newtv1Failure("No accessible controls found. This app may not expose its interface to macOS Accessibility.") }
         numberedPID = targetApp?.processIdentifier
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         for screen in NSScreen.screens {
@@ -305,16 +309,16 @@ final class Automation {
 
     private func moveWindow(_ position: String) throws {
         let app = try appElement()
-        guard let value = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { throw VoxFailure("No focused window to move.") }
+        guard let value = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { throw Newtv1Failure("No focused window to move.") }
         let window = value as! AXUIElement
         if position == "minimize" {
-            guard AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success else { throw VoxFailure("This window cannot be minimized.") }
+            guard AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success else { throw Newtv1Failure("This window cannot be minimized.") }
             return
         }
         let current = frame(window) ?? .zero
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         let cocoaCenter = CGPoint(x: current.midX, y: top - current.midY)
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(cocoaCenter) }) ?? NSScreen.main else { throw VoxFailure("No display found.") }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(cocoaCenter) }) ?? NSScreen.main else { throw Newtv1Failure("No display found.") }
         let bounds = screen.visibleFrame
         var rect = bounds
         switch position {
@@ -326,10 +330,10 @@ final class Automation {
         default: break
         }
         var point = CGPoint(x: rect.minX, y: top - rect.maxY); var size = rect.size
-        guard let p = AXValueCreate(.cgPoint, &point), let s = AXValueCreate(.cgSize, &size) else { throw VoxFailure("Cannot calculate window bounds.") }
+        guard let p = AXValueCreate(.cgPoint, &point), let s = AXValueCreate(.cgSize, &size) else { throw Newtv1Failure("Cannot calculate window bounds.") }
         let moved = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, p)
         let resized = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, s)
-        guard moved == .success, resized == .success else { throw VoxFailure("This app restricts moving or resizing this window.") }
+        guard moved == .success, resized == .success else { throw Newtv1Failure("This app restricts moving or resizing this window.") }
         hideNumbers()
     }
 }

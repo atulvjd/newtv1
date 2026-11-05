@@ -29,9 +29,9 @@ final class SpeechController: ObservableObject {
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
-        guard speech == .authorized else { fail("Allow Speech Recognition for Vox in System Settings → Privacy & Security."); return }
+        guard speech == .authorized else { fail("Allow Speech Recognition for Newtv1 in System Settings → Privacy & Security."); return }
         let microphone = await AVCaptureDevice.requestAccess(for: .audio)
-        guard microphone else { fail("Allow Microphone for Vox in System Settings → Privacy & Security."); return }
+        guard microphone else { fail("Allow Microphone for Newtv1 in System Settings → Privacy & Security."); return }
         guard let recognizer, recognizer.isAvailable else { fail("English speech recognition is unavailable on this Mac right now."); return }
         guard recognizer.supportsOnDeviceRecognition || allowNetwork else {
             fail("On-device English speech recognition is unavailable. You can opt into Apple network recognition in Settings."); return
@@ -50,7 +50,7 @@ final class SpeechController: ObservableObject {
         request.addsPunctuation = false
         request.requiresOnDeviceRecognition = !allowNetwork
         request.taskHint = .dictation
-        request.contextualStrings = ["Vox", "show numbers", "left half", "right half", "run focus mode"]
+        request.contextualStrings = ["Newtv1", "New TV One", "Hey New TV One", "show numbers", "left half", "right half", "run focus mode"]
         self.request = request
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)

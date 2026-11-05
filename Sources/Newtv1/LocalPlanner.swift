@@ -1,5 +1,5 @@
 import Foundation
-import VoxCore
+import Newtv1Core
 
 final class LocalPlanner: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -8,7 +8,7 @@ final class LocalPlanner: NSObject, URLSessionTaskDelegate {
 
     func plan(_ text: String, model: String, target: String, workflows: [Workflow]) async throws -> CommandPlan {
         let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !name.lowercased().contains("cloud"), !name.contains("://") else { throw VoxFailure("Choose an installed local Ollama model in Settings.") }
+        guard !name.isEmpty, !name.lowercased().contains("cloud"), !name.contains("://") else { throw Newtv1Failure("Choose an installed local Ollama model in Settings.") }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 90
         configuration.timeoutIntervalForResource = 100
@@ -18,7 +18,7 @@ final class LocalPlanner: NSObject, URLSessionTaskDelegate {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let system = """
-        Translate the user's Mac control request into a short ordered list of canonical Vox commands.
+        Translate the user's Mac control request into a short ordered list of canonical Newtv1 commands.
         Output JSON with keys commands (array of strings) and explanation (short string).
         Only these commands are supported:
         open APP, switch to APP, quit APP, go to HTTPS_URL, search for QUERY,
@@ -45,15 +45,15 @@ final class LocalPlanner: NSObject, URLSessionTaskDelegate {
             let (data, response) = try await session.data(for: request)
             try Task.checkCancellation()
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw VoxFailure("Ollama could not plan this command. Make sure the model “\(name)” is installed and supports structured output.")
+                throw Newtv1Failure("Ollama could not plan this command. Make sure the model “\(name)” is installed and supports structured output.")
             }
-            guard data.count < 1_000_000 else { throw VoxFailure("The model response was too large.") }
+            guard data.count < 1_000_000 else { throw Newtv1Failure("The model response was too large.") }
             struct Response: Decodable { struct Message: Decodable { let content: String }; let message: Message }
             let responseBody = try JSONDecoder().decode(Response.self, from: data)
             let proposed = try JSONDecoder().decode(ModelPlan.self, from: Data(responseBody.message.content.utf8))
             return try proposed.validated(transcript: text, workflows: workflows)
         } catch let error as URLError where error.code == .cannotConnectToHost || error.code == .networkConnectionLost {
-            throw VoxFailure("Cannot reach Ollama at 127.0.0.1:11434. Start Ollama with a local model, or use the phrases in Command guide.")
+            throw Newtv1Failure("Cannot reach Ollama at 127.0.0.1:11434. Start Ollama with a local model, or use the phrases in Command guide.")
         }
     }
 }
