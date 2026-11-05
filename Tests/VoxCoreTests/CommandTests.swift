@@ -1,7 +1,30 @@
-import XCTest
-@testable import VoxCore
+import Foundation
+import VoxCore
 
-final class CommandTests: XCTestCase {
+// Dependency-free regression runner so the suite also runs with Command Line Tools,
+// which do not ship XCTest. Every failed assertion contributes to a nonzero exit.
+private var failures: [String] = []
+private var assertions = 0
+
+private func XCTAssertEqual<T: Equatable>(_ lhs: @autoclosure () throws -> T, _ rhs: T, file: StaticString = #filePath, line: UInt = #line) {
+    assertions += 1
+    do { if try lhs() != rhs { failures.append("\(file):\(line): values were not equal") } }
+    catch { failures.append("\(file):\(line): unexpected error: \(error)") }
+}
+private func XCTAssertTrue(_ expression: @autoclosure () throws -> Bool, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
+    assertions += 1
+    do { if try !expression() { failures.append("\(file):\(line): expected true. \(message)") } }
+    catch { failures.append("\(file):\(line): unexpected error: \(error)") }
+}
+private func XCTAssertFalse(_ expression: @autoclosure () throws -> Bool, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertTrue(try !expression(), message, file: file, line: line)
+}
+private func XCTAssertThrowsError<T>(_ expression: @autoclosure () throws -> T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
+    assertions += 1
+    do { _ = try expression(); failures.append("\(file):\(line): expected an error. \(message)") } catch { }
+}
+
+final class CommandTests {
     let parser = CommandParser()
 
     func testChainedCommands() throws {
@@ -116,5 +139,41 @@ final class CommandTests: XCTestCase {
     func testEmptyModelPlanIsRejected() throws {
         let model = try JSONDecoder().decode(ModelPlan.self, from: Data(#"{"commands":[],"explanation":"Unsupported"}"#.utf8))
         XCTAssertThrowsError(try model.validated(transcript: "test", workflows: []))
+    }
+}
+
+@main
+struct CoreChecks {
+    static func main() {
+        let suite = CommandTests()
+        let cases: [(String, () throws -> Void)] = [
+            ("chained commands", suite.testChainedCommands),
+            ("literal text boundaries", suite.testLiteralTextCannotBecomeActions),
+            ("Unicode preservation", suite.testPreservesCaseAndUnicode),
+            ("spoken numbers", suite.testSpeechNumbers),
+            ("label clicks", suite.testLabelClicks),
+            ("numeric bounds", suite.testBounds),
+            ("empty and unknown commands", suite.testEmptyAndUnknown),
+            ("URLs and apps", suite.testURLsAndApps),
+            ("risk classification", suite.testRiskClassification),
+            ("shortcuts and scrolling", suite.testShortcutAndScroll),
+            ("workflow expansion", suite.testWorkflowExpansion),
+            ("nested risk propagation", suite.testWorkflowRiskCannotBeHidden),
+            ("cycle rejection", suite.testCyclesAreRejected),
+            ("unknown and empty workflows", suite.testUnknownAndEmptyWorkflows),
+            ("step limits", suite.testStepLimits),
+            ("workflow persistence encoding", suite.testWorkflowCodableRoundTrip),
+            ("model review requirement", suite.testModelPlansAlwaysRequireReview),
+            ("model shell rejection", suite.testModelsCannotGenerateShellDirectlyOrViaWorkflow),
+            ("empty model plan", suite.testEmptyModelPlanIsRejected)
+        ]
+        for (name, test) in cases {
+            let before = failures.count
+            do { try test() } catch { failures.append("\(name): \(error)") }
+            print("\(failures.count == before ? "PASS" : "FAIL") \(name)")
+        }
+        for failure in failures { fputs(failure + "\n", stderr) }
+        print("\(cases.count) groups, \(assertions) assertions, \(failures.count) failures")
+        exit(failures.isEmpty ? 0 : 1)
     }
 }

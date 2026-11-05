@@ -136,17 +136,22 @@ final class Automation {
             targetApp = NSWorkspace.shared.frontmostApplication
         case .typeText(let text):
             try requireAccessibility(); try await focusTarget()
-            let units = Array(text.utf16)
+            var chunks: [[UInt16]] = [[]]
+            for scalar in text.unicodeScalars {
+                let units = Array(String(scalar).utf16)
+                if chunks[chunks.count - 1].count + units.count > 20 { chunks.append([]) }
+                chunks[chunks.count - 1] += units
+            }
             // CGEvent supports short Unicode chunks; no clipboard overwrite or restore race.
-            for offset in stride(from: 0, to: units.count, by: 20) {
+            for chunk in chunks where !chunk.isEmpty {
                 try Task.checkCancellation()
-                let chunk = Array(units[offset..<min(offset + 20, units.count)])
                 guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                       let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { throw VoxFailure("Cannot create keyboard event.") }
                 chunk.withUnsafeBufferPointer { buffer in
                     down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buffer.baseAddress!)
                     up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buffer.baseAddress!)
                 }
+                down.flags = []; up.flags = []
                 down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
                 try await Task.sleep(nanoseconds: 8_000_000)
             }
@@ -261,7 +266,7 @@ final class Automation {
             let (node, depth) = queue[index]; index += 1
             guard visited.insert(CFHash(node)).inserted else { continue }
             let role = attribute(node, kAXRoleAttribute) as? String ?? ""
-            let actionable = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXLinkRole, kAXTextFieldRole, kAXTextAreaRole, kAXPopUpButtonRole, kAXMenuButtonRole, kAXComboBoxRole].contains(role)
+            let actionable = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, "AXLink", kAXTextFieldRole, kAXTextAreaRole, kAXPopUpButtonRole, kAXMenuButtonRole, kAXComboBoxRole].contains(role)
             let enabled = attribute(node, kAXEnabledAttribute) as? Bool ?? true
             if actionable, enabled, let rect = frame(node), visible.contains(where: { $0.intersects(rect) }) {
                 let title = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].compactMap { attribute(node, $0) as? String }.first { !$0.isEmpty } ?? role.replacingOccurrences(of: "AX", with: "")

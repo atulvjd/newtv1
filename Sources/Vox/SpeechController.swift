@@ -47,6 +47,7 @@ final class SpeechController: ObservableObject {
         consumed = false; lastText = ""; transcript = ""; sessionStarted = Date()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.addsPunctuation = false
         request.requiresOnDeviceRecognition = !allowNetwork
         request.taskHint = .dictation
         request.contextualStrings = ["Vox", "show numbers", "left half", "right half", "run focus mode"]

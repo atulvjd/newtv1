@@ -8,6 +8,6 @@ let package = Package(
     targets: [
         .target(name: "VoxCore"),
         .executableTarget(name: "Vox", dependencies: ["VoxCore"]),
-        .testTarget(name: "VoxCoreTests", dependencies: ["VoxCore"])
+        .executableTarget(name: "VoxCoreChecks", dependencies: ["VoxCore"], path: "Tests/VoxCoreTests")
     ]
 )

@@ -12,6 +12,7 @@ app="dist/Vox.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary_dir/Vox" "$app/Contents/MacOS/Vox"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+swift scripts/make-icon.swift "$app/Contents/Resources/Vox.icns"
 if [[ -n "${VOX_SIGN_IDENTITY:-}" ]]; then
     codesign --force --options runtime --sign "$VOX_SIGN_IDENTITY" --entitlements Resources/Vox.entitlements "$app"
 else
