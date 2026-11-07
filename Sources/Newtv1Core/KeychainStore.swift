@@ -45,6 +45,9 @@ public enum KeychainStore {
     }
 
     private static func check(_ status: OSStatus) throws {
-        guard status == errSecSuccess else { throw CommandError.invalid("Keychain access failed (\(status)). Unlock your login Keychain and try again.") }
+        guard status == errSecSuccess else {
+            if status == errSecAuthFailed { throw CommandError.invalid("macOS denied this Newtv1 build access to the saved API key. Allow it in the Keychain prompt, or update the Newtv1 key's access in Keychain Access. Rebuilding a locally signed app can require approval again.") }
+            throw CommandError.invalid("Keychain access failed (\(status)). Unlock your login Keychain and try again.")
+        }
     }
 }

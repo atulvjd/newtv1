@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Action: Equatable, Sendable {
+public enum Action: Equatable, Sendable, Codable {
     case openApp(String), quitApp(String), openURL(String), search(String)
     case typeText(String), shortcut(String), click(String), clickNumber(Int)
     case showNumbers, hideNumbers, scroll(String, Int), window(String)
@@ -10,6 +10,13 @@ public enum Action: Equatable, Sendable {
     public var needsConfirmation: Bool {
         switch self {
         case .quitApp, .shell, .lock, .sleep: return true
+        default: return false
+        }
+    }
+
+    public var requiresAccessibility: Bool {
+        switch self {
+        case .typeText, .shortcut, .click, .clickNumber, .showNumbers, .scroll, .window, .lock: return true
         default: return false
         }
     }
@@ -46,6 +53,7 @@ public struct CommandPlan: Equatable, Sendable {
     public let actions: [Action]
     public let requiresReview: Bool
     public var needsConfirmation: Bool { requiresReview || actions.contains { $0.needsConfirmation } }
+    public var requiresAccessibility: Bool { actions.contains { $0.requiresAccessibility } }
     public init(transcript: String, actions: [Action], requiresReview: Bool = false) {
         self.transcript = transcript
         self.actions = actions

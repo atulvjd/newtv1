@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Newtv1 Browser Context",
+  "version": "0.1.0",
+  "description": "Preview the current page and share its text locally with Newtv1 on request.",
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "action": { "default_popup": "popup.html", "default_title": "Share page with Newtv1" }
+}

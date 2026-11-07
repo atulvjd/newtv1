@@ -10,6 +10,14 @@ final class SpeechController: ObservableObject {
     @Published var status = "Microphone off"
     var onUtterance: ((String) -> Void)?
     var onFailure: ((String) -> Void)?
+    var wakePhrases = ["Newt", "New", "Hey Newt", "Hey New"]
+    var localeIdentifier = "en-US"
+    var vocabulary: [String] = []
+    var dictation = false
+    var automaticLanguage = false
+    var transcribeAudio: ((Data) async throws -> String)?
+    private let cloud = CloudSpeechRecorder()
+    var submitsOnPause = true
     private let engine = AVAudioEngine()
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -18,23 +26,46 @@ final class SpeechController: ObservableObject {
     private var rotationTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var tapInstalled = false
+    private var startToken = UUID()
     private var generation = UUID()
     private var consumed = false
     private var lastText = ""
     private var sessionStarted = Date()
+    private var finishing = false
+    private var finalTimeout: Task<Void, Never>?
+    private var currentAllowNetwork = false
 
     func start(allowNetwork: Bool) async {
         guard !isListening else { return }
+        let startToken = UUID(); self.startToken = startToken
+        if automaticLanguage {
+            guard let transcribeAudio else { fail("Configure the OpenAI key before using automatic language recognition."); return }
+            let microphone = await AVCaptureDevice.requestAccess(for: .audio)
+            guard self.startToken == startToken, !Task.isCancelled else { return }
+            guard microphone else { fail("Allow Microphone for Newtv1 in Privacy & Security."); return }
+            cloud.transcribe = transcribeAudio
+            cloud.onText = { [weak self] text in guard let self, self.isListening else { return }; self.transcript = text; self.onUtterance?(text) }
+            cloud.onLevel = { [weak self] level in self?.level = level }
+            cloud.onFailure = { [weak self] message in self?.fail(message) }
+            cloud.onFinished = { [weak self] in self?.isListening = false; self?.status = "Microphone off" }
+            do { try cloud.start(hold: !submitsOnPause); isListening = true; transcript = ""; status = "Automatic language · audio sent to OpenAI" }
+            catch { fail(error.localizedDescription) }
+            return
+        }
+        recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        currentAllowNetwork = allowNetwork
         status = "Checking permissions…"
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
+        guard self.startToken == startToken, !Task.isCancelled else { return }
         guard speech == .authorized else { fail("Allow Speech Recognition for Newtv1 in System Settings → Privacy & Security."); return }
         let microphone = await AVCaptureDevice.requestAccess(for: .audio)
+        guard self.startToken == startToken, !Task.isCancelled else { return }
         guard microphone else { fail("Allow Microphone for Newtv1 in System Settings → Privacy & Security."); return }
-        guard let recognizer, recognizer.isAvailable else { fail("English speech recognition is unavailable on this Mac right now."); return }
+        guard let recognizer, recognizer.isAvailable else { fail("Speech recognition for the selected language is unavailable on this Mac right now."); return }
         guard recognizer.supportsOnDeviceRecognition || allowNetwork else {
-            fail("On-device English speech recognition is unavailable. You can opt into Apple network recognition in Settings."); return
+            fail("On-device recognition for this language is unavailable. Choose another language or opt into Apple network recognition in Settings."); return
         }
         isListening = true
         beginSession(allowNetwork: allowNetwork)
@@ -44,13 +75,13 @@ final class SpeechController: ObservableObject {
         guard isListening, let recognizer else { return }
         tearDownSession()
         let token = UUID(); generation = token
-        consumed = false; lastText = ""; transcript = ""; sessionStarted = Date()
+        consumed = false; finishing = false; lastText = ""; transcript = ""; sessionStarted = Date()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.addsPunctuation = false
+        request.addsPunctuation = dictation
         request.requiresOnDeviceRecognition = !allowNetwork
         request.taskHint = .dictation
-        request.contextualStrings = ["Newtv1", "New TV One", "Hey New TV One", "show numbers", "left half", "right half", "run focus mode"]
+        request.contextualStrings = Array((wakePhrases + vocabulary + ["show numbers", "left half", "right half", "run focus mode"]).prefix(100))
         self.request = request
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -78,14 +109,19 @@ final class SpeechController: ObservableObject {
                     if text != self.lastText {
                         self.lastText = text
                         self.silenceTask?.cancel()
-                        self.silenceTask = Task { [weak self] in
+                        if self.submitsOnPause { self.silenceTask = Task { [weak self] in
                             do { try await Task.sleep(nanoseconds: 1_100_000_000) } catch { return }
                             self?.consume(text, allowNetwork: allowNetwork)
-                        }
+                        } }
                     }
-                    if result.isFinal { self.consume(text, allowNetwork: allowNetwork) }
+                    if result.isFinal, self.submitsOnPause || self.finishing { self.consume(text, allowNetwork: allowNetwork) }
                 }
                 if let error, !self.consumed {
+                    if self.finishing {
+                        if self.lastText.isEmpty { self.stop() }
+                        else { self.consume(self.lastText, allowNetwork: allowNetwork) }
+                        return
+                    }
                     // Speech sessions expire. Restart with backoff; permission/service errors stop visibly.
                     if Date().timeIntervalSince(self.sessionStarted) < 2 {
                         self.fail("Speech recognition stopped: \(error.localizedDescription)")
@@ -103,6 +139,7 @@ final class SpeechController: ObservableObject {
         guard isListening, !consumed, !text.isEmpty else { return }
         consumed = true
         silenceTask?.cancel()
+        if finishing { stop() }
         onUtterance?(text)
         // Start with an empty transcript so recognition never replays an earlier action.
         if isListening { scheduleRestart(allowNetwork: allowNetwork, delay: 250_000_000) }
@@ -118,8 +155,27 @@ final class SpeechController: ObservableObject {
     }
 
     func stop() {
+        startToken = UUID()
+        cloud.stop()
         isListening = false; restartTask?.cancel(); restartTask = nil
         tearDownSession(); level = 0; status = "Microphone off"
+        finalTimeout?.cancel(); finalTimeout = nil; finishing = false
+    }
+
+    func finishUtterance() {
+        guard isListening else { return }
+        if automaticLanguage { cloud.finish(); return }
+        finishing = true; silenceTask?.cancel(); rotationTask?.cancel(); restartTask?.cancel()
+        engine.stop()
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        request?.endAudio()
+        finalTimeout?.cancel()
+        finalTimeout = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 1_200_000_000) } catch { return }
+            guard let self, self.isListening else { return }
+            if self.lastText.isEmpty { self.stop() }
+            else { self.consume(self.lastText, allowNetwork: self.currentAllowNetwork) }
+        }
     }
 
     private func tearDownSession() {

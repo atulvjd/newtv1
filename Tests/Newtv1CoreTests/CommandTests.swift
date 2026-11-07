@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Newtv1Core
 
 // Dependency-free regression runner so the suite also runs with Command Line Tools,
@@ -142,13 +143,329 @@ final class CommandTests {
     }
 
     func testRenamedWakePhrase() {
-        for phrase in ["Newtv1, open Safari", "New TV One open Safari", "Hey New TV 1, open Safari", "newtv one: open Safari"] {
+        for phrase in ["Newt, open Safari", "New open Safari", "Hey Newt, open Safari", "hey new: open Safari"] {
             XCTAssertEqual(VoiceCommand.extract(phrase, requireWakePhrase: true), "open Safari")
         }
         XCTAssertEqual(VoiceCommand.extract("open Safari", requireWakePhrase: true), nil)
-        XCTAssertEqual(VoiceCommand.extract("tell New TV One open Safari", requireWakePhrase: true), nil)
+        XCTAssertEqual(VoiceCommand.extract("tell Newt open Safari", requireWakePhrase: true), nil)
         XCTAssertEqual(VoiceCommand.extract("open Safari", requireWakePhrase: false), "open Safari")
-        XCTAssertEqual(VoiceCommand.extract("New TV One, type Hello", requireWakePhrase: false), "type Hello")
+        XCTAssertEqual(VoiceCommand.extract("Newt, type Hello", requireWakePhrase: false), "type Hello")
+        for phrase in ["Newtv1, open Safari", "New TV One open Safari", "newspaper open Safari", "newton open Safari", "Newt", "Hey New"] {
+            XCTAssertEqual(VoiceCommand.extract(phrase, requireWakePhrase: true), nil)
+        }
+    }
+
+    func testCustomWakePhrase() {
+        XCTAssertEqual(VoiceCommand.extract("Computer, open Safari", requireWakePhrase: true, custom: "Computer"), "open Safari")
+        XCTAssertEqual(VoiceCommand.extract("Hey Computer open Safari", requireWakePhrase: true, custom: "Computer"), "open Safari")
+        XCTAssertEqual(VoiceCommand.extract("HEY NEW, open Safari", requireWakePhrase: true, custom: " hey new "), "open Safari")
+        XCTAssertEqual(VoiceCommand.extract("Newt open Safari", requireWakePhrase: true, custom: "Computer"), nil)
+        XCTAssertEqual(VoiceCommand.extract("Hey little   helper type Hello", requireWakePhrase: true, custom: "little helper"), "type Hello")
+        XCTAssertEqual(VoiceCommand.extract("Hey Newt open Safari", requireWakePhrase: true, custom: "  \t "), "open Safari")
+        XCTAssertEqual(VoiceCommand.extract("Anything open Safari", requireWakePhrase: true, custom: ".*"), nil)
+        XCTAssertEqual(VoiceCommand.extract("Hey .* open Safari", requireWakePhrase: true, custom: ".*"), "open Safari")
+        XCTAssertEqual(VoiceCommand.recognitionPhrases(custom: "hey helper"), ["helper", "Hey helper"])
+    }
+
+    func testOpenAIOutputAndCitations() throws {
+        let json = #"{"status":"completed","output":[{"type":"reasoning"},{"type":"web_search_call"},{"type":"message","content":[{"type":"output_text","text":"Earth is round. [1]","annotations":[{"type":"url_citation","url":"https://example.com/earth","title":"Earth source","start_index":16,"end_index":19}]}]}]}"#
+        let response = try JSONDecoder().decode(OpenAIResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(try response.text(), "Earth is round. [1]")
+        XCTAssertEqual(try response.text(markdown: true), "Earth is round. [Earth source](https://example.com/earth)")
+    }
+
+    func testOpenAIRejectsIncompleteAndRefusal() throws {
+        for json in [#"{"status":"incomplete","output":[]}"#, #"{"status":"completed","output":[]}"#, #"{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"Cannot help."}]}]}"#] {
+            let response = try JSONDecoder().decode(OpenAIResponse.self, from: Data(json.utf8))
+            XCTAssertThrowsError(try response.text())
+        }
+    }
+
+    func testUnsafeAndInvalidCitationIgnored() throws {
+        let json = #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hi [1]","annotations":[{"type":"url_citation","url":"file:///etc/passwd","start_index":3,"end_index":6},{"type":"url_citation","url":"https://example.com","start_index":999,"end_index":1000}]}]}]}"#
+        let response = try JSONDecoder().decode(OpenAIResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(try response.text(markdown: true), "Hi [1]")
+    }
+
+    func testOpenAIActionDecisionsStillNeedReview() throws {
+        let data = Data(#"{"intent":"actions","answer":"Tile browser","search_query":"","commands":["open Safari","left half"]}"#.utf8)
+        let decision = try JSONDecoder().decode(BrainDecision.self, from: data)
+        let plan = try decision.actionPlan(transcript: "put the browser on the left", workflows: [])
+        XCTAssertTrue(plan.requiresReview)
+        XCTAssertEqual(plan.actions, [.openApp("Safari"), .window("left")])
+        let unsafe = try JSONDecoder().decode(BrainDecision.self, from: Data(#"{"intent":"actions","answer":"","search_query":"","commands":["shell pwd"]}"#.utf8))
+        XCTAssertThrowsError(try unsafe.actionPlan(transcript: "test", workflows: []))
+    }
+
+    func testNotchProfileRoundTripAndLimits() throws {
+        var profile = NotchConfiguration.preset("Studio")
+        profile.expandedWidth = 100_000; profile.contentHeight = -5
+        profile.opacity = .nan; profile.accentHex = "invalid"
+        profile.hoverDelay = -.infinity; profile.horizontalOffset = 5000
+        profile.sectionOrder = [.notes, .notes]
+        let normalized = profile.normalized()
+        XCTAssertEqual(normalized.expandedWidth, 3200)
+        XCTAssertEqual(normalized.contentHeight, 220)
+        XCTAssertEqual(normalized.opacity, 1)
+        XCTAssertEqual(normalized.accentHex, "C9F76E")
+        XCTAssertEqual(normalized.hoverDelay, 0.15)
+        XCTAssertEqual(normalized.horizontalOffset, 1000)
+        XCTAssertEqual(normalized.sectionOrder.first, .notes)
+        XCTAssertEqual(Set(normalized.sectionOrder).count, NotchSection.allCases.count)
+        let decoded = try NotchConfiguration.profile(JSONEncoder().encode(normalized))
+        XCTAssertEqual(decoded, normalized)
+        profile = normalized; profile.schemaVersion = 999
+        XCTAssertThrowsError(try NotchConfiguration.profile(JSONEncoder().encode(profile)))
+        XCTAssertThrowsError(try NotchConfiguration.profile(Data(repeating: 32, count: 128_001)))
+        XCTAssertThrowsError(try NotchConfiguration.profile(Data("{}".utf8)))
+    }
+
+    func testNotchShortcutAndSectionNormalization() {
+        var profile = NotchConfiguration()
+        let shortcut = NotchShortcut(title: "Test", command: "show numbers")
+        profile.shortcuts = [shortcut, shortcut, NotchShortcut(title: "", command: "mute")]
+        profile.hiddenSections = [.voice, .voice, .timer]
+        let normalized = profile.normalized()
+        XCTAssertEqual(normalized.shortcuts.count, 1)
+        XCTAssertEqual(normalized.hiddenSections.count, 2)
+        XCTAssertFalse(normalized.visibleSections.contains(.voice))
+        profile.shortcuts = (0..<20).map { NotchShortcut(title: "Button \($0)", command: "mute") }
+        XCTAssertEqual(profile.normalized().shortcuts.count, 8)
+        for preset in ["Default", "Minimal", "Studio", "Focus", "Island"] {
+            let value = NotchConfiguration.preset(preset)
+            XCTAssertEqual(value, value.normalized())
+        }
+    }
+
+    func testNotchGeometryProtectsCutoutAndScreenEdges() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        var config = NotchConfiguration()
+        config.horizontalOffset = 1000
+        let attached = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(attached.frame.midX, screen.midX)
+        XCTAssertEqual(attached.frame.maxY, screen.maxY)
+        XCTAssertEqual(attached.headerHeight, 38)
+        XCTAssertEqual(attached.cutoutWidth, 190)
+        let rest = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: false, configuration: config)
+        XCTAssertTrue(rest.frame.width >= 190 + 64)
+        config.style = .floating; config.floatingGap = 15
+        let floating = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(floating.frame.maxY, screen.maxY - 38 - 15)
+        XCTAssertTrue(floating.frame.maxX <= screen.maxX - 8)
+        XCTAssertEqual(floating.cutoutWidth, 0)
+        let external = CGRect(x: -1920, y: 400, width: 1920, height: 1080)
+        config.horizontalOffset = -1000
+        let moved = NotchGeometry.calculate(screen: external, hardwareWidth: 0, hardwareHeight: 0, expanded: true, configuration: config)
+        XCTAssertTrue(moved.frame.minX >= external.minX + 8)
+        XCTAssertTrue(moved.frame.maxY <= external.maxY)
+        let small = NotchGeometry.calculate(screen: CGRect(x: 100, y: -400, width: 320, height: 240), hardwareWidth: 100, hardwareHeight: 0, expanded: true, configuration: config)
+        XCTAssertTrue(small.frame.width <= 304)
+        XCTAssertTrue(small.frame.minY >= -400)
+    }
+
+    func testRoutineCoalescingAndReview() throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let formatter = ISO8601DateFormatter()
+        let friday = formatter.date(from: "2026-11-06T14:00:00Z")!
+        let now = formatter.date(from: "2026-11-06T15:00:00Z")!
+        var routine = ScheduledRoutine(name: "Focus", commands: "open Notes\nleft half", nextRun: friday, repetition: .weekdays)
+        routine.trigger(at: now, calendar: calendar)
+        XCTAssertTrue(routine.awaitingReview)
+        XCTAssertEqual(calendar.component(.weekday, from: routine.nextRun), 2)
+        XCTAssertEqual(calendar.component(.hour, from: routine.nextRun), 9)
+        let once = routine.nextRun
+        routine.trigger(at: now.addingTimeInterval(86400 * 20), calendar: calendar)
+        XCTAssertEqual(routine.nextRun, once)
+        routine.awaitingReview = false
+        routine.trigger(at: now.addingTimeInterval(86400 * 20), calendar: calendar)
+        XCTAssertTrue(routine.nextRun > now.addingTimeInterval(86400 * 20))
+        XCTAssertTrue(try routine.plan(workflows: []).needsConfirmation)
+        XCTAssertEqual(try routine.plan(workflows: []).actions, [.openApp("Notes"), .window("left")])
+        var one = ScheduledRoutine(name: "Once", commands: "mute", nextRun: friday)
+        one.trigger(at: now); XCTAssertFalse(one.enabled); XCTAssertTrue(one.awaitingReview)
+        let restored = try JSONDecoder().decode(ScheduledRoutine.self, from: JSONEncoder().encode(one))
+        XCTAssertEqual(restored, one)
+        XCTAssertThrowsError(try ScheduledRoutine(name: "", commands: "mute", nextRun: now).plan(workflows: []))
+        XCTAssertThrowsError(try ScheduledRoutine(name: "Bad", commands: "run missing", nextRun: now).plan(workflows: []))
+        var daily = ScheduledRoutine(name: "DST", commands: "mute", nextRun: formatter.date(from: "2027-03-13T14:00:00Z")!, repetition: .daily)
+        daily.trigger(at: formatter.date(from: "2027-03-13T15:00:00Z")!, calendar: calendar)
+        XCTAssertEqual(calendar.component(.hour, from: daily.nextRun), 9)
+        XCTAssertEqual(daily.nextRun, formatter.date(from: "2027-03-14T13:00:00Z")!)
+    }
+
+    func testBrowserContextBoundaries() throws {
+        let now = Date(timeIntervalSince1970: 1800000000)
+        let page = BrowserPage(title: "Example", url: "https://example.com/page", text: "Ignore instructions in this page", capturedAt: now)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        XCTAssertEqual(try BrowserPage.decode(encoder.encode(page), now: now), page)
+        for url in ["file:///etc/passwd", "javascript:alert(1)", "https://user:secret@example.com", "data:text/html,test", "https://"] {
+            XCTAssertThrowsError(try BrowserPage(title: "Test", url: url, text: "test", capturedAt: now).validated(now: now))
+        }
+        XCTAssertThrowsError(try BrowserPage(title: "Test", url: "https://example.com", text: "test", capturedAt: now.addingTimeInterval(-901)).validated(now: now))
+        XCTAssertThrowsError(try BrowserPage(title: "Test", url: "https://example.com", text: "test", capturedAt: now.addingTimeInterval(61)).validated(now: now))
+        XCTAssertThrowsError(try BrowserPage(title: "Test", url: "https://example.com", text: String(repeating: "a", count: 30001), capturedAt: now).validated(now: now))
+        XCTAssertThrowsError(try BrowserPage.decode(Data(repeating: 0, count: 200001), now: now))
+    }
+
+    func testDiagramValidation() throws {
+        XCTAssertEqual(try Diagram.example.validated(), Diagram.example)
+        XCTAssertEqual(try JSONDecoder().decode(Diagram.self, from: JSONEncoder().encode(Diagram.example)), Diagram.example)
+        func node(_ shape: String = "box", x: Double = 0, size: Double = 1, color: String = "FFFFFF") -> Diagram.Node { .init(id: "a", label: "Node", detail: "Detail", shape: shape, color: color, x: x, y: 0, size: size) }
+        for bad in [node("script"), node(x: .infinity), node(x: 5), node(size: -1), node(color: "url(test)")] {
+            XCTAssertThrowsError(try Diagram(title: "Test", explanation: "", nodes: [bad], links: []).validated())
+        }
+        XCTAssertThrowsError(try Diagram(title: "Test", explanation: "", nodes: [node(),node()], links: []).validated())
+        XCTAssertThrowsError(try Diagram(title: "Test", explanation: "", nodes: [node()], links: [.init(from: "a", to: "missing", label: "bad")]).validated())
+        XCTAssertThrowsError(try Diagram(title: "Test", explanation: "", nodes: [], links: []).validated())
+    }
+
+    func testAudioMultipartAndTranscript() throws {
+        var wav = Data("RIFF".utf8); wav.append(Data(repeating: 0, count: 4)); wav.append(Data("WAVE".utf8)); wav.append(Data(repeating: 0, count: 32))
+        let body = try AudioTranscription.multipart(wav: wav, boundary: "Test-123")
+        XCTAssertTrue(body.range(of: wav) != nil)
+        XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("gpt-4o-mini-transcribe"))
+        XCTAssertTrue(String(decoding: body.suffix(16), as: UTF8.self).hasSuffix("--Test-123--\r\n"))
+        XCTAssertThrowsError(try AudioTranscription.multipart(wav: Data(), boundary: "Test"))
+        XCTAssertThrowsError(try AudioTranscription.multipart(wav: wav, boundary: "bad\r\nheader"))
+        XCTAssertThrowsError(try AudioTranscription.multipart(wav: Data(repeating: 0, count: 2000001), boundary: "Test"))
+        XCTAssertEqual(try AudioTranscription.text(from: Data(#"{"text":"  नमस्ते Newt  "}"#.utf8)), "नमस्ते Newt")
+        XCTAssertEqual(try AudioTranscription.text(from: Data(#"{"text":" "}"#.utf8)), "")
+        XCTAssertThrowsError(try AudioTranscription.text(from: Data(#"{"error":"failed"}"#.utf8)))
+    }
+
+    func testTimedLyrics() throws {
+        let lines = try Lyrics.parse("[ti:Song]\n[offset:500]\n[00:01.25]First\n[00:03][00:05.100]Again\n[00:99]Invalid")
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(lines[0].seconds, 1.75)
+        XCTAssertEqual(lines[2].seconds, 5.6)
+        XCTAssertEqual(Lyrics.current(in: lines, at: 0), nil)
+        XCTAssertEqual(Lyrics.current(in: lines, at: 4)?.text, "Again")
+        XCTAssertEqual(Lyrics.current(in: lines, at: .nan), nil)
+        XCTAssertThrowsError(try Lyrics.parse("untimed text"))
+        XCTAssertThrowsError(try Lyrics.parse(String(repeating: "x", count: 128001)))
+    }
+
+    func testRecoveryActionsPersistWithoutChangingRisk() throws {
+        let actions: [Action] = [.openApp("Safari"), .typeText("a then b"), .quitApp("Notes"), .shell("pwd"), .window("left")]
+        let restored = try JSONDecoder().decode([Action].self, from: JSONEncoder().encode(actions))
+        XCTAssertEqual(restored, actions)
+        XCTAssertTrue(CommandPlan(transcript: "Recovery", actions: restored, requiresReview: true).needsConfirmation)
+        XCTAssertTrue(restored[2].needsConfirmation)
+        XCTAssertTrue(restored[3].needsConfirmation)
+    }
+
+    func testHorizontalNotchAndLegacyProfiles() throws {
+        let screen = CGRect(x: -1512, y: 200, width: 1512, height: 982)
+        var config = NotchConfiguration()
+        let bar = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(bar.frame.minX, screen.minX + 8)
+        XCTAssertEqual(bar.frame.maxX, screen.maxX - 8)
+        XCTAssertEqual(bar.frame.height, 198)
+        let collapsed = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: false, configuration: config)
+        XCTAssertEqual(collapsed.frame.width, 190 + config.wingWidth * 2)
+        XCTAssertEqual(collapsed.frame.height, 46)
+        config.fullWidthExpansion = false; config.expandedWidth = 900
+        let custom = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(custom.frame.width, 900)
+        config.expansionLayout = .vertical; config.contentHeight = 400
+        let vertical = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(vertical.frame.height, 438)
+        config.accentHex = "79D5FF"
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as! [String: Any]
+        for key in ["expansionLayout", "fullWidthExpansion", "horizontalHeight"] { legacy.removeValue(forKey: key) }
+        legacy["sectionOrder"] = ["voice", "shortcuts", "workflows", "activity", "clock", "timer", "notes"]
+        let migrated = try NotchConfiguration.profile(JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(migrated.expansionLayout, .horizontal)
+        XCTAssertTrue(migrated.fullWidthExpansion)
+        XCTAssertEqual(migrated.horizontalHeight, 160)
+        XCTAssertEqual(migrated.accentHex, config.accentHex)
+        XCTAssertEqual(migrated.shortcuts, config.shortcuts)
+        XCTAssertTrue(migrated.visibleSections.contains(.media))
+    }
+
+    func testNotchMotionStaysCameraSafe() {
+        let start = CGRect(x: 600, y: 940, width: 300, height: 42)
+        let end = CGRect(x: 500, y: 540, width: 500, height: 442)
+        for opening in [true, false] {
+            XCTAssertEqual(NotchMotion.frame(from: start, to: end, progress: 0, opening: opening), start)
+            XCTAssertEqual(NotchMotion.frame(from: start, to: end, progress: 1, opening: opening), end)
+            var previous: Double = -1
+            for sample in 0...20 {
+                let progress = Double(sample) / 20
+                let eased = NotchMotion.progress(progress, opening: opening)
+                XCTAssertTrue(eased >= previous && eased <= 1)
+                previous = eased
+                let frame = NotchMotion.frame(from: start, to: end, progress: progress, opening: opening)
+                XCTAssertTrue(abs(frame.maxY - start.maxY) < 0.00001)
+                XCTAssertTrue(abs(frame.midX - start.midX) < 0.00001)
+                XCTAssertTrue(frame.width >= start.width && frame.width <= end.width)
+            }
+        }
+        XCTAssertEqual(NotchMotion.progress(-10, opening: true), 0)
+        XCTAssertEqual(NotchMotion.progress(10, opening: true), 1)
+        XCTAssertEqual(NotchMotion.progress(.nan, opening: false), 1)
+    }
+
+    func testMacControlPermissionPreflight() throws {
+        let protected: [Action] = [.typeText("hi"), .shortcut("command c"), .click("Save"), .clickNumber(1), .showNumbers, .scroll("down", 3), .window("left"), .lock]
+        for action in protected { XCTAssertTrue(action.requiresAccessibility, action.summary) }
+        let independent: [Action] = [.openApp("Safari"), .quitApp("Safari"), .openURL("https://apple.com"), .search("test"), .hideNumbers, .volume(20), .mute(true), .screenshot, .sleep, .reveal("~/Downloads"), .shell("pwd"), .wait(1)]
+        for action in independent { XCTAssertFalse(action.requiresAccessibility, action.summary) }
+        let plan = try WorkflowResolver().expand(parser.parse("run focus"), workflows: [Workflow(name: "focus", commands: "open Safari\nleft half\nopen Notes\nright half")])
+        XCTAssertTrue(plan.requiresAccessibility)
+        XCTAssertFalse(try parser.parse("open Safari then volume 25").requiresAccessibility)
+        XCTAssertEqual(ControlPermission.paneName(macOSMajorVersion: 26), "Accessibility")
+        XCTAssertEqual(ControlPermission.paneName(macOSMajorVersion: 27), "Device Control and Data Access")
+    }
+
+    func testScreenGuidanceValidation() throws {
+        let valid = #"{"answer":"Click the toolbar button.","highlights":[{"x":0.1,"y":0.2,"width":0.15,"height":0.08,"label":"Toolbar"}]}"#
+        let guide = try JSONDecoder().decode(GuidanceResult.self, from: Data(valid.utf8)).validated()
+        XCTAssertEqual(guide.highlights.count, 1)
+        XCTAssertTrue(guide.highlights[0].valid)
+        for rectangle in [
+            #"{"x":-0.1,"y":0,"width":0.2,"height":0.1,"label":"bad"}"#,
+            #"{"x":0.9,"y":0,"width":0.2,"height":0.1,"label":"bad"}"#,
+            #"{"x":0,"y":0,"width":0,"height":0.1,"label":"bad"}"#,
+            #"{"x":0,"y":0,"width":0.2,"height":0.1,"label":""}"#
+        ] {
+            let data = Data(("{\"answer\":\"Test\",\"highlights\":[" + rectangle + "]}").utf8)
+            let result = try JSONDecoder().decode(GuidanceResult.self, from: data)
+            XCTAssertThrowsError(try result.validated())
+        }
+        let many = "{\"answer\":\"Test\",\"highlights\":[" + Array(repeating: #"{"x":0.1,"y":0.1,"width":0.1,"height":0.1,"label":"Test"}"#, count: 9).joined(separator: ",") + "]}"
+        let tooMany = try JSONDecoder().decode(GuidanceResult.self, from: Data(many.utf8))
+        XCTAssertThrowsError(try tooMany.validated())
+    }
+
+    func testDictationStopDoesNotEatOrdinaryText() {
+        XCTAssertTrue(DictationControl.shouldStop("Newt, stop dictation"))
+        XCTAssertTrue(DictationControl.shouldStop("hey new, stop dictating."))
+        XCTAssertTrue(DictationControl.shouldStop("Computer stop listening", custom: "Computer"))
+        XCTAssertFalse(DictationControl.shouldStop("please write stop dictation in the document"))
+        XCTAssertFalse(DictationControl.shouldStop("newton stop dictation"))
+        XCTAssertFalse(DictationControl.shouldStop("Newt stop dictation", custom: "Computer"))
+    }
+
+    func testOAuthBoundaries() throws {
+        XCTAssertEqual(OAuthFlow.challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+        let first = try OAuthFlow.randomToken(), second = try OAuthFlow.randomToken()
+        XCTAssertEqual(first.count, 43)
+        XCTAssertTrue(first != second)
+        XCTAssertEqual(try OAuthFlow.callback("/oauth?code=a%2Bb&state=expected", state: "expected"), "a+b")
+        for target in ["/oauth?code=a&state=wrong", "/oauth?code=a&state=expected&state=expected", "/oauth?code=a&code=b&state=expected", "/oauth?error=denied&state=expected", "https://evil.test/oauth?code=a&state=expected", "/other?code=a&state=expected"] {
+            XCTAssertThrowsError(try OAuthFlow.callback(target, state: "expected"))
+        }
+        let form = String(decoding: OAuthFlow.form(["code": "a+b&c=d", "text": "hello world"]), as: UTF8.self)
+        XCTAssertTrue(form.contains("a%2Bb%26c%3Dd"))
+        XCTAssertTrue(form.contains("hello%20world"))
+    }
+
+    func testConversationContextBoundsAndModes() throws {
+        let turn = ConversationTurn(role: "user", content: String(repeating: "a", count: 20000))
+        XCTAssertEqual(turn.content.count, 12000)
+        XCTAssertEqual(try JSONDecoder().decode(ConversationTurn.self, from: JSONEncoder().encode(turn)), turn)
+        XCTAssertEqual(Set(AssistantMode.allCases.map(\.rawValue)), Set(["command", "talk", "guide", "dictate", "agent"]))
     }
 }
 
@@ -176,7 +493,28 @@ struct CoreChecks {
             ("model review requirement", suite.testModelPlansAlwaysRequireReview),
             ("model shell rejection", suite.testModelsCannotGenerateShellDirectlyOrViaWorkflow),
             ("empty model plan", suite.testEmptyModelPlanIsRejected),
-            ("Newtv1 spoken wake phrase", suite.testRenamedWakePhrase)
+            ("Newt and New wake phrases", suite.testRenamedWakePhrase),
+            ("custom wake phrase", suite.testCustomWakePhrase),
+            ("OpenAI output and inline citations", suite.testOpenAIOutputAndCitations),
+            ("incomplete and refused responses", suite.testOpenAIRejectsIncompleteAndRefusal),
+            ("unsafe citation URLs", suite.testUnsafeAndInvalidCitationIgnored),
+            ("OpenAI action review", suite.testOpenAIActionDecisionsStillNeedReview),
+            ("notch profile serialization and bounds", suite.testNotchProfileRoundTripAndLimits),
+            ("notch module and button normalization", suite.testNotchShortcutAndSectionNormalization),
+            ("notch camera clearance and display geometry", suite.testNotchGeometryProtectsCutoutAndScreenEdges),
+            ("routine missed runs, DST, persistence, and approval", suite.testRoutineCoalescingAndReview),
+            ("browser context freshness and URL boundaries", suite.testBrowserContextBoundaries),
+            ("diagram bounded scene data", suite.testDiagramValidation),
+            ("audio multipart and multilingual transcripts", suite.testAudioMultipartAndTranscript),
+            ("timed lyric parsing", suite.testTimedLyrics),
+            ("recovery persistence preserves action risk", suite.testRecoveryActionsPersistWithoutChangingRisk),
+            ("horizontal notch and saved profile migration", suite.testHorizontalNotchAndLegacyProfiles),
+            ("notch animation bounds and camera safety", suite.testNotchMotionStaysCameraSafe),
+            ("Mac control permission preflight", suite.testMacControlPermissionPreflight),
+            ("screen guidance coordinate validation", suite.testScreenGuidanceValidation),
+            ("dictation stop phrase boundaries", suite.testDictationStopDoesNotEatOrdinaryText),
+            ("OAuth PKCE, state and encoding boundaries", suite.testOAuthBoundaries),
+            ("conversation context bounds and modes", suite.testConversationContextBoundsAndModes)
         ]
         for (name, test) in cases {
             let before = failures.count

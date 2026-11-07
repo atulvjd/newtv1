@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import Newtv1Core
 
 @MainActor
 final class NotchController: ObservableObject {
@@ -18,6 +19,15 @@ final class NotchController: ObservableObject {
     private var subscriptions = Set<AnyCancellable>()
     private var collapseTask: Task<Void, Never>?
     private var hovered = false
+    private var hoverTask: Task<Void, Never>?
+    private var frameTimer: Timer?
+    private var motionToken = UUID()
+    var showsBody: Bool { expanded || panelHeight > topHeight + 12 }
+    var bodyVisibility: Double {
+        let config = model.notch.normalized()
+        let target = config.expansionLayout == .horizontal ? config.horizontalHeight : config.contentHeight
+        return min(max(Double(panelHeight - topHeight - 45) / max(1, min(125, target - 45)), 0), 1)
+    }
 
     init(model: AppModel) { self.model = model }
 
@@ -34,54 +44,106 @@ final class NotchController: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
         panel.acceptsMouseMovedEvents = true
-        panel.contentView = NSHostingView(rootView: NotchView(controller: self, model: model, speech: model.speech).ignoresSafeArea().preferredColorScheme(.dark))
+        panel.contentView = NSHostingView(rootView: NotchView(controller: self, model: model, speech: model.speech, speaker: model.speaker).ignoresSafeArea().preferredColorScheme(.dark))
         self.panel = panel
+        pinned = model.notch.pinnedOnLaunch
+        expanded = pinned
+        model.onPreviewNotch = { [weak self] in self?.reveal() }
         reposition()
+        model.$notch.dropFirst().sink { [weak self] _ in
+            // Published values arrive before assignment; apply on the next main turn.
+            Task { @MainActor [weak self] in self?.reposition() }
+        }.store(in: &subscriptions)
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.reposition() }
+            Task { @MainActor in self?.reposition(); self?.model.objectWillChange.send() }
         }
         model.speech.$isListening.dropFirst().sink { [weak self] listening in
-            guard let self, listening else { return }
+            guard let self, listening, self.model.notch.expandOnListening else { return }
             self.setExpanded(true); self.scheduleCollapse(after: 3)
         }.store(in: &subscriptions)
         model.$busy.dropFirst().sink { [weak self] busy in
-            guard let self, busy else { return }
+            guard let self, busy, self.model.notch.expandOnExecution else { return }
             self.setExpanded(true); self.scheduleCollapse(after: 3)
         }.store(in: &subscriptions)
         model.$error.dropFirst().sink { [weak self] error in
-            guard let self, error != nil else { return }
+            guard let self, error != nil, self.model.notch.expandOnError else { return }
             self.setExpanded(true); self.scheduleCollapse(after: 6)
         }.store(in: &subscriptions)
     }
 
     private func reposition() {
-        display = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.screens.first
-        guard let screen = display else { return }
-        topHeight = screen.safeAreaInsets.top > 0 ? screen.safeAreaInsets.top : 32
-        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 {
-            cutoutWidth = max(120, right.minX - left.maxX)
-        } else { cutoutWidth = 180 }
+        let choice = model.notch.displayID
+        if choice == "main" { display = NSScreen.screens.first }
+        else if choice != "automatic" {
+            display = NSScreen.screens.first { String(($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0) == choice }
+        } else { display = nil }
+        if display == nil || !NSScreen.screens.contains(where: { $0 == display }) {
+            display = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.screens.first
+        }
         applyFrame()
     }
 
-    private func applyFrame() {
+    private func applyFrame(animated: Bool = false) {
         guard let screen = display, let panel else { return }
-        let width = min(screen.frame.width - 32, expanded ? max(420, cutoutWidth + 128) : cutoutWidth + 104)
-        let height = expanded ? topHeight + 224 : topHeight + 8
-        panelWidth = width; panelHeight = height
-        panel.setFrame(NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height), display: true)
+        var hardwareWidth: CGFloat = 180
+        var center = screen.frame.midX
+        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 {
+            hardwareWidth = max(120, right.minX - left.maxX)
+            center = (left.maxX + right.minX) / 2
+        }
+        let layout = NotchGeometry.calculate(screen: screen.frame, hardwareWidth: hardwareWidth, hardwareHeight: screen.safeAreaInsets.top, hardwareCenter: center, expanded: expanded, configuration: model.notch)
+        cutoutWidth = layout.cutoutWidth; topHeight = layout.headerHeight
+        frameTimer?.invalidate(); frameTimer = nil
+        motionToken = UUID()
+        let token = motionToken
+        let shouldAnimate = animated && model.notch.animations && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && panel.frame.width > 0
+        if shouldAnimate {
+            let from = panel.frame
+            let target = layout.frame
+            let opening = expanded
+            let duration = opening ? 0.42 : 0.26
+            let started = ProcessInfo.processInfo.systemUptime
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+                Task { @MainActor [weak self] in
+                    guard let self, self.motionToken == token else { timer.invalidate(); return }
+                    let progress = min((ProcessInfo.processInfo.systemUptime - started) / duration, 1)
+                    self.displayFrame(NotchMotion.frame(from: from, to: target, progress: progress, opening: opening))
+                    if progress >= 1 { timer.invalidate(); self.frameTimer = nil }
+                }
+            }
+            frameTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        } else { displayFrame(layout.frame) }
         panel.orderFrontRegardless()
     }
 
+    private func displayFrame(_ frame: CGRect) {
+        // The view and native panel advance together, preserving the top edge and click targets.
+        var transaction = Transaction(); transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            panelWidth = frame.width; panelHeight = frame.height
+            panel?.setFrame(frame, display: true)
+        }
+    }
+
     func setExpanded(_ value: Bool) {
-        collapseTask?.cancel()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { expanded = value }
-        applyFrame()
+        collapseTask?.cancel(); hoverTask?.cancel()
+        let changed = expanded != value
+        expanded = value
+        applyFrame(animated: changed)
     }
 
     func hover(_ value: Bool) {
-        hovered = value
-        if value { setExpanded(true) } else { scheduleCollapse(after: 0.65) }
+        hovered = value; hoverTask?.cancel()
+        if value {
+            collapseTask?.cancel()
+            guard model.notch.hoverToExpand, !expanded else { return }
+            hoverTask = Task { [weak self] in
+                guard let self else { return }
+                do { try await Task.sleep(nanoseconds: UInt64(self.model.notch.hoverDelay * 1_000_000_000)) } catch { return }
+                if self.hovered { self.setExpanded(true) }
+            }
+        } else { scheduleCollapse(after: model.notch.collapseDelay) }
     }
 
     private func scheduleCollapse(after seconds: Double) {
@@ -95,9 +157,9 @@ final class NotchController: ObservableObject {
 
     func togglePin() {
         pinned.toggle()
-        if pinned { setExpanded(true) } else if !hovered { scheduleCollapse(after: 0.65) }
+        if pinned { setExpanded(true) } else if !hovered { scheduleCollapse(after: model.notch.collapseDelay) }
     }
-    func reveal() { setExpanded(true); scheduleCollapse(after: 4) }
+    func reveal() { setExpanded(true); scheduleCollapse(after: 6) }
 
     func openCommandCenter() {
         if dashboard == nil {
@@ -119,89 +181,4 @@ final class NotchController: ObservableObject {
 private final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
-}
-
-private struct NotchView: View {
-    @ObservedObject var controller: NotchController
-    @ObservedObject var model: AppModel
-    @ObservedObject var speech: SpeechController
-    private let green = Color(red: 0.79, green: 0.97, blue: 0.43)
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Button { model.toggleListening() } label: {
-                    Image(systemName: speech.isListening ? "waveform" : "mic.slash.fill")
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(speech.isListening ? green : Color.white.opacity(0.65))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }.buttonStyle(.plain).help("Toggle Newtv1 listening (Option–Space)")
-                Color.clear.frame(width: controller.cutoutWidth)
-                Button { controller.togglePin() } label: {
-                    Group {
-                        if model.busy { ProgressView().controlSize(.mini).tint(green) }
-                        else { Image(systemName: model.error != nil ? "exclamationmark.circle.fill" : "sparkle").foregroundStyle(model.error != nil ? .orange : green) }
-                    }.font(.system(size: 12)).frame(maxWidth: .infinity, maxHeight: .infinity)
-                }.buttonStyle(.plain).help("Pin or expand Newtv1")
-            }.frame(height: controller.topHeight)
-            if controller.expanded {
-                expandedContent.padding(.horizontal, 22).padding(.top, 10).padding(.bottom, 16)
-                    .transition(.opacity)
-            } else { Color.clear.frame(height: 8) }
-        }
-        .frame(width: controller.panelWidth, height: controller.panelHeight, alignment: .top)
-        .background(NotchShape().fill(.black))
-        .clipShape(NotchShape())
-        .overlay(alignment: .bottom) { if speech.isListening { Capsule().fill(green.opacity(0.7)).frame(width: 34 + CGFloat(speech.level) * 45, height: 2).padding(.bottom, 3) } }
-        .onHover { controller.hover($0) }
-        .accessibilityElement(children: .contain).accessibilityLabel("Newtv1 notch controls")
-    }
-
-    private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform").foregroundStyle(green)
-                Text("Newtv1").font(.system(size: 17, weight: .semibold, design: .rounded))
-                Spacer()
-                Text(model.busy ? "WORKING" : speech.isListening ? "LISTENING" : "STANDBY")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(1.3).foregroundStyle(speech.isListening ? green : .gray)
-                Button { controller.togglePin() } label: { Image(systemName: controller.pinned ? "pin.fill" : "pin").foregroundStyle(controller.pinned ? green : .gray) }.buttonStyle(.plain).help("Keep expanded")
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(model.error != nil ? "Needs your attention" : model.busy ? "Making it happen." : speech.isListening ? "Your next move?" : "Your Mac, one phrase away.")
-                    .font(.system(size: 19, weight: .medium)).tracking(-0.5)
-                Text(model.error ?? (speech.transcript.isEmpty ? (model.wakeWord ? "Say “New TV One, open Safari”." : "Start listening, then say a command.") : speech.transcript))
-                    .font(.system(size: 11)).foregroundStyle(model.error != nil ? Color.orange : Color.white.opacity(0.48)).lineLimit(2).frame(height: 30, alignment: .top)
-            }
-            HStack(spacing: 8) {
-                Button { model.toggleListening() } label: {
-                    Label(model.speechStarting ? "Starting…" : speech.isListening ? "Stop listening" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).padding(.vertical, 10).background(green, in: RoundedRectangle(cornerRadius: 9))
-                }.buttonStyle(.plain).disabled(model.speechStarting)
-                Button { model.stop(); speech.stop() } label: { Image(systemName: "stop.circle").font(.system(size: 16)).foregroundStyle(.orange).frame(width: 36, height: 34).background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9)) }.buttonStyle(.plain).help("Stop all actions")
-                Button { model.openCommandCenter() } label: { Image(systemName: "arrow.up.right.square").font(.system(size: 15)).foregroundStyle(.white.opacity(0.8)).frame(width: 36, height: 34).background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9)) }.buttonStyle(.plain).help("Open command center")
-            }
-            HStack(spacing: 6) {
-                Circle().fill(model.accessibility ? green : .orange).frame(width: 4, height: 4)
-                Button(model.accessibility ? model.targetName : "Set up Accessibility") { model.openCommandCenter(page: model.accessibility ? .control : .settings) }.buttonStyle(.plain).font(.system(size: 9)).foregroundStyle(.gray).lineLimit(1)
-                Spacer()
-                Button { model.openCommandCenter(page: .brain) } label: { Image(systemName: "sparkles") }.buttonStyle(.plain).foregroundStyle(green).help("Open Brain")
-                Text("⌥ SPACE").font(.system(size: 9, design: .monospaced)).foregroundStyle(.gray)
-            }
-        }
-    }
-}
-
-private struct NotchShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let r: CGFloat = min(22, rect.height / 2)
-        var path = Path()
-        path.move(to: rect.origin)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
-        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r), control: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
 }

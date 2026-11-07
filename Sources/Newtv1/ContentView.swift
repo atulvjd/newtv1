@@ -29,12 +29,21 @@ struct ContentView: View {
                                 Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                                 Text(error).font(.system(size: 13)).textSelection(.enabled)
                                 Spacer()
+                                if model.accessibilityIssue { Button("Set up access") { model.openCommandCenter(page: .settings) }.buttonStyle(.bordered) }
                                 Button { model.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
                             }.padding(15).background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
                         }
                         switch model.page {
+                        case .diagrams: DiagramStudio(model: model)
+                        case .connections: ConnectionsView(model: model, connections: model.connections)
+                        case .browser: BrowserContextView(model: model, browser: model.browser)
+                        case .utilities: UtilitiesView(model: model)
+                        case .routines: RoutinesView(model: model, store: model.routines)
+                        case .companion: CompanionView(model: model, speech: speech, speaker: model.speaker)
                         case .control: commandCenter
                         case .brain: brain
+                        case .jobs: AgentJobsView(model: model)
+                        case .notch: NotchStudio(model: model)
                         case .workflows: workflows
                         case .guide: guide
                         case .settings: settings
@@ -50,7 +59,7 @@ struct ContentView: View {
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return .discarded }
             return .systemAction
         })
-        .sheet(item: $model.pending) { plan in confirmation(plan) }
+        .sheet(item: $model.pending, onDismiss: { model.reviewSheetDismissed() }) { plan in confirmation(plan) }
         .sheet(isPresented: $newWorkflow) { WorkflowEditor(model: model, workflow: nil) }
         .sheet(item: $editingWorkflow) { workflow in WorkflowEditor(model: model, workflow: workflow) }
     }
@@ -63,6 +72,7 @@ struct ContentView: View {
                 Text("LOCAL").font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1).foregroundStyle(muted).padding(.horizontal, 5).padding(.vertical, 4).overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.12)))
             }.padding(.top, 38).padding(.bottom, 42).padding(.horizontal, 24)
             Text("WORKSPACE").font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(muted).padding(.horizontal, 25).padding(.bottom, 14)
+            ScrollView(showsIndicators: false) { VStack(spacing: 0) {
             ForEach(AppPage.allCases, id: \.self) { page in
                 Button { model.page = page } label: {
                     HStack(spacing: 12) {
@@ -74,14 +84,14 @@ struct ContentView: View {
                         .background(page == model.page ? accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain).padding(.horizontal, 12).padding(.bottom, 4)
             }
-            Spacer()
+            } }.frame(maxHeight: .infinity, alignment: .top)
             VStack(alignment: .leading, spacing: 12) {
                 HStack { Circle().fill(speech.isListening ? accent : muted).frame(width: 6, height: 6); Text(speech.isListening ? "MICROPHONE ACTIVE" : "READY WHEN YOU ARE").font(.system(size: 9, weight: .semibold)).tracking(1) }
                 Text("Your Mac.\nYour command.").font(.system(size: 20, weight: .medium)).foregroundStyle(Color.white.opacity(0.8))
                 HStack { Text("⌥"); Text("space") }.font(.system(size: 11, design: .monospaced)).foregroundStyle(muted).padding(7).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.1)))
                 Text("Toggle voice from any app").font(.system(size: 10)).foregroundStyle(muted)
             }.padding(19).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 12)).padding(14)
-            HStack { Text("NEWTV1 FOR macOS"); Spacer(); Text("v0.2") }.font(.system(size: 9, design: .monospaced)).foregroundStyle(muted.opacity(0.7)).padding(22)
+            HStack { Text("NEWTV1 FOR macOS"); Spacer(); Text("v\(model.runningVersion)") }.font(.system(size: 9, design: .monospaced)).foregroundStyle(muted.opacity(0.7)).padding(22)
         }.background(Color.white.opacity(0.012))
     }
 
@@ -111,10 +121,10 @@ struct ContentView: View {
                     Text(model.allowNetwork ? "APPLE SPEECH" : "ON-DEVICE SPEECH").font(.system(size: 9, design: .monospaced)).foregroundStyle(muted)
                 }.padding(20)
                 HStack(spacing: 28) {
-                    VoiceOrb(active: speech.isListening, level: speech.level).frame(width: 180, height: 180)
+                    VoiceOrb(active: speech.isListening, level: speech.level, busy: model.busy || model.speechStarting, attention: model.error != nil, tint: model.notch.tint, animated: model.notch.animations).frame(width: 180, height: 180)
                     VStack(alignment: .leading, spacing: 13) {
                         Text(model.busy ? "Making it happen." : speech.isListening ? "I’m listening." : "Your voice is the shortcut.").font(.system(size: 26, weight: .medium)).tracking(-0.6)
-                        Text(speech.isListening ? (model.wakeWord ? "Start with “Newtv1”, then say a command." : "Say a command, then pause to execute.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
+                        Text(speech.isListening ? (model.wakeWord ? "Start with “\(model.wakePhraseLabel)”, then say a command." : "Say a command, then pause to execute.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
                             .font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 12) {
                             Button { model.toggleListening() } label: {
@@ -127,7 +137,7 @@ struct ContentView: View {
                 }.padding(.horizontal, 20).padding(.bottom, 24)
                 HStack(spacing: 10) {
                     Image(systemName: "quote.bubble").foregroundStyle(accent.opacity(0.65))
-                    Text(speech.transcript.isEmpty ? "Try “Newtv1, open Safari then left half”" : speech.transcript).font(.system(size: 12)).foregroundStyle(speech.transcript.isEmpty ? muted : .white).lineLimit(2)
+                    Text(speech.transcript.isEmpty ? "Try “\(model.wakePhraseLabel), open Safari then left half”" : speech.transcript).font(.system(size: 12)).foregroundStyle(speech.transcript.isEmpty ? muted : .white).lineLimit(2)
                     Spacer()
                     if speech.isListening { WaveMeter(level: speech.level) }
                 }.padding(17).background(Color.black.opacity(0.14))
@@ -177,12 +187,12 @@ struct ContentView: View {
 
     private var workflows: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack { title("One phrase. A whole routine.", "Build sequences you can run with “Newtv1, run focus mode”."); Spacer(); Button { newWorkflow = true } label: { Label("New workflow", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
+            HStack { title("One phrase. A whole routine.", "Build sequences you can run with “\(model.wakePhraseLabel), run focus mode”."); Spacer(); Button { newWorkflow = true } label: { Label("New workflow", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
             ForEach(model.workflows) { workflow in
                 VStack(alignment: .leading, spacing: 14) {
                     HStack { Image(systemName: "square.stack.3d.up.fill").foregroundStyle(accent); Text(workflow.name).font(.system(size: 18, weight: .medium)); Spacer(); Button("Edit") { editingWorkflow = workflow }.buttonStyle(.bordered); Button { model.submit("run \(workflow.name)") } label: { Label("Run", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(model.busy) }
                     Text(workflow.commands).font(.system(size: 12, design: .monospaced)).foregroundStyle(muted).lineSpacing(6).textSelection(.enabled)
-                    HStack { Text("SAY “NEWTV1, RUN \(workflow.name.uppercased())”").font(.system(size: 9, design: .monospaced)).foregroundStyle(accent.opacity(0.7)); Spacer(); Button(role: .destructive) { model.workflows.removeAll { $0.id == workflow.id } } label: { Image(systemName: "trash") }.buttonStyle(.plain).help("Delete workflow") }
+                    HStack { Text("SAY “\(model.wakePhraseLabel.uppercased()), RUN \(workflow.name.uppercased())”").font(.system(size: 9, design: .monospaced)).foregroundStyle(accent.opacity(0.7)); Spacer(); Button(role: .destructive) { model.workflows.removeAll { $0.id == workflow.id } } label: { Image(systemName: "trash") }.buttonStyle(.plain).help("Delete workflow") }
                 }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             }
             if model.workflows.isEmpty { Text("Create your first workflow to combine commands into a routine.").foregroundStyle(muted) }
@@ -204,7 +214,7 @@ struct ContentView: View {
             }.padding(16).background(surface, in: RoundedRectangle(cornerRadius: 12))
             if !model.keyConfigured { Button("Connect OpenAI in Settings") { model.page = .settings }.buttonStyle(.bordered) }
             if model.brainAnswers.isEmpty {
-                Text("Try “ask why the sky is blue” or “research the latest Mac news” in the command center. Voice works too: “New TV One, ask …”. Answers stay in memory for this session.").font(.system(size: 13)).foregroundStyle(muted).lineSpacing(5)
+                Text("Try “ask why the sky is blue” or “research the latest Mac news” in the command center. Voice works too: “\(model.wakePhraseLabel), ask …”. Answers stay in memory for this session.").font(.system(size: 13)).foregroundStyle(muted).lineSpacing(5)
             }
             ForEach(model.brainAnswers) { answer in
                 VStack(alignment: .leading, spacing: 16) {
@@ -219,7 +229,7 @@ struct ContentView: View {
 
     private var guide: some View {
         VStack(alignment: .leading, spacing: 22) {
-            title("A few words go a long way.", "Use these phrases as written. Add “Newtv1” first when wake phrase mode is on.")
+            title("A few words go a long way.", "Use these phrases as written. Add “\(model.wakePhraseLabel)” first when wake phrase mode is on.")
             ForEach(Array(commandGroups.enumerated()), id: \.offset) { _, group in
                 VStack(alignment: .leading, spacing: 14) {
                     Text(group.0).font(.system(size: 16, weight: .medium))
@@ -233,7 +243,29 @@ struct ContentView: View {
     private var settings: some View {
         VStack(alignment: .leading, spacing: 22) {
             title("Set up your command space.", "macOS permissions keep you in charge of what Newtv1 can do.")
+            VStack(alignment: .leading, spacing: 15) {
+                HStack {
+                    Label(model.accessibility ? "Mac control connected" : "Finish Mac control setup", systemImage: model.accessibility ? "checkmark.shield.fill" : "hand.raised.fill").font(.system(size: 17, weight: .medium)).foregroundStyle(model.accessibility ? accent : .orange)
+                    Spacer()
+                    Text("Newtv1 \(model.runningVersion)").font(.system(size: 10, design: .monospaced)).foregroundStyle(muted)
+                }
+                Text("Open Privacy & Security → \(model.controlPermissionName), add Newtv1 if needed, and turn on its switch. This allows clicking, typing, shortcuts, and window control.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(4)
+                Text("If Newtv1 is already enabled but this card stays disconnected: quit Newtv1, remove its previous entry, add the app at the path below, enable it, then reopen it. Local development rebuilds can need a new grant.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(4)
+                Text(model.runningAppPath).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).padding(10).frame(maxWidth: .infinity, alignment: .leading).background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 7))
+                HStack {
+                    Button("Open permission settings") { model.requestAccessibility() }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                    Button("Show this app in Finder") { model.revealRunningApp() }.buttonStyle(.bordered)
+                    Button("Check again") { model.refreshPermissions() }.buttonStyle(.bordered)
+                }
+                if let plan = model.blockedForAccessibility {
+                    Divider()
+                    Text("Waiting: \(plan.transcript)").font(.system(size: 12, weight: .medium))
+                    Text("No steps from this request have run. Granting permission does not start it automatically.").font(.system(size: 11)).foregroundStyle(muted)
+                    HStack { Button("Retry request") { model.retryAfterAccessibility() }.buttonStyle(.bordered).disabled(!model.accessibility); Button("Discard") { model.blockedForAccessibility = nil; model.accessibilityIssue = false; model.error = nil }.buttonStyle(.plain) }
+                }
+            }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 18) {
+                CompanionPreferences(model: model)
                 HStack { Label("OpenAI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
                 Toggle("Use OpenAI for questions and natural-language actions", isOn: $model.useOpenAI).toggleStyle(.switch).disabled(!model.keyConfigured)
                 Toggle("Allow web search for answers", isOn: $model.allowWebSearch).toggleStyle(.switch)
@@ -247,7 +279,7 @@ struct ContentView: View {
                 Text("Questions and searches are sent to OpenAI; action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API requests and web searches use your API credits. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(spacing: 0) {
-                permissionRow("Accessibility", "Click controls, type, send shortcuts, and move windows.", model.accessibility) { model.requestAccessibility() }
+                permissionRow(model.controlPermissionName, "Click controls, type, send shortcuts, and move windows.", model.accessibility) { model.requestAccessibility() }
                 Divider().overlay(Color.white.opacity(0.04))
                 permissionRow("Microphone", "Hear your commands while listening is enabled.", model.microphone) { model.openPrivacy("Microphone") }
                 Divider().overlay(Color.white.opacity(0.04))
@@ -256,7 +288,9 @@ struct ContentView: View {
                 HStack { VStack(alignment: .leading, spacing: 5) { Text("Screen Recording").font(.system(size: 13, weight: .medium)); Text("Only needed for the screenshot command.").font(.system(size: 11)).foregroundStyle(muted) }; Spacer(); Button("Open settings") { model.openPrivacy("ScreenCapture") }.buttonStyle(.bordered) }.padding(20)
             }.background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 22) {
-                Toggle(isOn: $model.wakeWord) { VStack(alignment: .leading, spacing: 5) { Text("Require “New TV One” before each command").font(.system(size: 13, weight: .medium)); Text("Say “New TV One” or “Hey New TV One”. The transcript may also spell it Newtv1.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
+                Toggle(isOn: $model.wakeWord) { VStack(alignment: .leading, spacing: 5) { Text("Require a wake phrase before each command").font(.system(size: 13, weight: .medium)); Text("Default: “Newt”, “New”, “Hey Newt”, or “Hey New”.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
+                HStack { Text("Custom wake phrase").font(.system(size: 12)); TextField("Leave blank for Newt / New", text: $model.customWakePhrase).textFieldStyle(.roundedBorder) }
+                Text("A custom phrase replaces the defaults and also accepts “Hey” before it. Changing this stops listening; press Option–Space to restart with the new phrase.").font(.system(size: 11)).foregroundStyle(muted)
                 Divider()
                 Toggle(isOn: $model.allowNetwork) { VStack(alignment: .leading, spacing: 5) { Text("Allow Apple network speech recognition").font(.system(size: 13, weight: .medium)); Text("Off by default. Turning this on may send audio to Apple. Changing it stops listening.").font(.system(size: 11)).foregroundStyle(muted) } }.toggleStyle(.switch)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
@@ -268,7 +302,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Local by default", systemImage: "lock.shield").font(.system(size: 14, weight: .medium)).foregroundStyle(accent)
                 Text("Direct commands and workflows run locally. The optional OpenAI brain uses your API key, stored in macOS Keychain. Recognition requires on-device support unless you enable Apple network recognition above. Recent activity and answers stay in memory; workflows and settings are saved on this Mac.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
-                Text("Stop with ⌘. in Newtv1, the menu bar Stop action, or “Newtv1, stop”. Already completed actions cannot be undone automatically. Shell tasks run as your user, time out after 30 seconds, and must be reviewed on screen.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
+                Text("Stop with ⌘. in Newtv1, the menu bar Stop action, or “\(model.wakePhraseLabel), stop”. Already completed actions cannot be undone automatically. Shell tasks run as your user, time out after 30 seconds, and must be reviewed on screen.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
         }
     }
@@ -297,11 +331,11 @@ struct ContentView: View {
     private func confirmation(_ plan: CommandPlan) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             Label("Review this command", systemImage: "hand.raised").font(.system(size: 23, weight: .semibold))
-            if plan.requiresReview { Label("Proposed by your local model", systemImage: "sparkles").font(.system(size: 12)).foregroundStyle(accent) }
+            if plan.requiresReview { Label("Proposed by AI", systemImage: "sparkles").font(.system(size: 12)).foregroundStyle(accent) }
             Text("This plan includes an action that needs your approval. All steps are shown below in execution order.").font(.system(size: 12)).foregroundStyle(muted)
             ScrollView { VStack(alignment: .leading, spacing: 14) { ForEach(Array(plan.actions.enumerated()), id: \.offset) { index, action in HStack(alignment: .top) { Text(String(format: "%02d", index + 1)).foregroundStyle(muted); Text(action.summary).textSelection(.enabled); Spacer(); if action.needsConfirmation { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) } }.font(.system(size: 12, design: .monospaced)) } }.padding(18) }.frame(maxHeight: 280).background(surface, in: RoundedRectangle(cornerRadius: 12))
             if plan.actions.contains(where: { if case .shell = $0 { return true }; return false }) { Text("Shell commands have your user’s file and network access. Review the exact code above. Stop can terminate the direct process; detached subprocesses may continue.").font(.system(size: 11)).foregroundStyle(.orange) }
-            HStack { Button("Cancel") { model.pending = nil }.keyboardShortcut(.cancelAction); Spacer(); Button("Approve & run") { model.approve() }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
+            HStack { Button("Cancel") { model.cancelPendingPlan() }.keyboardShortcut(.cancelAction); Spacer(); Button("Approve & run") { model.approve() }.buttonStyle(.borderedProminent).foregroundStyle(.black) }
         }.padding(28).frame(width: 570)
     }
 }
@@ -320,22 +354,16 @@ private let commandGroups: [(String, [String])] = [
 private struct VoiceOrb: View {
     let active: Bool
     let level: Float
+    let busy: Bool
+    let attention: Bool
+    let tint: Color
+    let animated: Bool
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !active)) { timeline in
-            let time = active ? timeline.date.timeIntervalSinceReferenceDate : 0
-            ZStack {
-                Circle().fill(Color.purple.opacity(0.09)).frame(width: 172, height: 172).blur(radius: 10)
-                Circle().stroke(Color.white.opacity(0.045), lineWidth: 1).frame(width: 167, height: 167)
-                ForEach(0..<9) { index in
-                    Ellipse().stroke(AngularGradient(colors: [.purple.opacity(0.2), Color(red: 0.55, green: 0.45, blue: 1), .cyan.opacity(0.65), .purple.opacity(0.2)], center: .center), lineWidth: index % 3 == 0 ? 1.5 : 0.7)
-                        .frame(width: CGFloat(120 + index * 3), height: CGFloat(74 + index * 6))
-                        .rotationEffect(.degrees(Double(index * 23) + sin(time * 0.7 + Double(index)) * 17))
-                        .scaleEffect(active ? 1 + Double(level) * 0.11 : 0.96)
-                }
-                Circle().fill(RadialGradient(colors: [Color(red: 0.55, green: 0.42, blue: 0.95).opacity(0.45), .clear], center: .center, startRadius: 1, endRadius: 65)).frame(width: 125, height: 125)
-                Image(systemName: "waveform").font(.system(size: 30, weight: .light)).foregroundStyle(Color.white.opacity(0.8)).shadow(color: .purple, radius: 12)
-            }.frame(width: 180, height: 180)
-        }
+        ZStack {
+            Circle().fill(RadialGradient(colors: [tint.opacity(0.08), .clear], center: .center, startRadius: 10, endRadius: 90))
+            Circle().stroke(tint.opacity(0.08), lineWidth: 0.7).padding(10)
+            NewtSignal(state: attention ? .attention : busy ? .working : active ? .listening : .idle, level: level, tint: tint, animated: animated)
+        }.frame(width: 180, height: 180)
     }
 }
 

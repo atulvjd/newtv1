@@ -87,14 +87,36 @@ final class Automation {
     private var numberedPID: pid_t?
     private var overlays: [NSPanel] = []
     let runner = ProcessRunner()
+    private var windowVerification: (AXUIElement, CGRect?, Bool)?
+    private var globalInterrupt: Any?
+    private var localInterrupt: Any?
     var trusted: Bool { AXIsProcessTrusted() }
+
+    func watchForUserInterruption(_ stop: @escaping @MainActor () -> Void) {
+        stopWatchingForInterruption()
+        let mask: NSEvent.EventTypeMask = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown]
+        let handle: (NSEvent) -> Void = { event in
+            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != 0x4E545631 else { return }
+            guard event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) != Int64(ProcessInfo.processInfo.processIdentifier) else { return }
+            guard event.type != .keyDown || event.keyCode == 53 else { return }
+            Task { @MainActor in stop() }
+        }
+        globalInterrupt = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: handle)
+        localInterrupt = NSEvent.addLocalMonitorForEvents(matching: mask) { event in handle(event); return event }
+    }
+    func stopWatchingForInterruption() {
+        if let globalInterrupt { NSEvent.removeMonitor(globalInterrupt) }
+        if let localInterrupt { NSEvent.removeMonitor(localInterrupt) }
+        globalInterrupt = nil; localInterrupt = nil
+    }
 
     func externalAppActivated(_ app: NSRunningApplication) {
         if let numberedPID, numberedPID != app.processIdentifier { hideNumbers() }
     }
 
     func requireAccessibility() throws {
-        guard trusted else { throw Newtv1Failure("Enable Newtv1 in System Settings → Privacy & Security → Accessibility, then try again.") }
+        let pane = ControlPermission.paneName(macOSMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+        guard trusted else { throw Newtv1Failure("Enable this Newtv1 copy in System Settings → Privacy & Security → \(pane). If already enabled, re-add the current app and restart it.") }
     }
 
     func focusTarget() async throws {
@@ -114,7 +136,8 @@ final class Automation {
         try Task.checkCancellation()
         switch action {
         case .openApp(let name):
-            _ = try await runner.run("/usr/bin/open", ["-a", name])
+            let resolved = resolveAppName(name)
+            _ = try await runner.run("/usr/bin/open", ["-a", resolved])
             try await Task.sleep(nanoseconds: 500_000_000)
             if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { targetApp = front }
         case .quitApp(let name):
@@ -152,7 +175,7 @@ final class Automation {
                     up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buffer.baseAddress!)
                 }
                 down.flags = []; up.flags = []
-                down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+                down.postForNewt(); up.postForNewt()
                 try await Task.sleep(nanoseconds: 8_000_000)
             }
         case .shortcut(let combo):
@@ -183,7 +206,7 @@ final class Automation {
             let vertical = direction == "up" ? amount : direction == "down" ? -amount : 0
             let horizontal = direction == "left" ? amount : direction == "right" ? -amount : 0
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(vertical), wheel2: Int32(horizontal), wheel3: 0) else { throw Newtv1Failure("Cannot create scroll event.") }
-            event.post(tap: .cghidEventTap)
+            event.postForNewt()
         case .window(let position):
             try requireAccessibility(); try await focusTarget(); try moveWindow(position)
         case .volume(let amount): _ = try await runner.run("/usr/bin/osascript", ["-e", "set volume output volume \(amount)"])
@@ -213,6 +236,60 @@ final class Automation {
         return action.summary
     }
 
+    func controlObservation() throws -> String {
+        try requireAccessibility()
+        let controls = try scanControls().prefix(80).map { "\($0.id): \(String($0.label.prefix(100)))" }
+        return localObservation() + "\nAccessible controls (labels only, no field values):\n" + controls.joined(separator: "\n")
+    }
+
+    func localObservation() -> String {
+        guard let targetApp else { return "No target app" }
+        var parts = [targetApp.localizedName ?? "App"]
+        if trusted, let app = try? appElement(), let value = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let window = value as! AXUIElement
+            if let title = attribute(window, kAXTitleAttribute) as? String { parts.append(String(title.prefix(160))) }
+            if let rect = frame(window) { parts.append("window \(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height))") }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    func verify(_ action: Action) throws -> String {
+        switch action {
+        case .openApp(let name):
+            let resolved = resolveAppName(name)
+            guard NSWorkspace.shared.runningApplications.contains(where: { $0.localizedName?.localizedCaseInsensitiveCompare(resolved) == .orderedSame }) else { throw Newtv1Failure("Verification failed: \(resolved) is not running.") }
+            return "Verified app is running."
+        case .quitApp(let name):
+            guard !NSWorkspace.shared.runningApplications.contains(where: { $0.localizedName?.localizedCaseInsensitiveCompare(name) == .orderedSame }) else { throw Newtv1Failure("App is still running. Check for an unsaved document or confirmation dialog before continuing.") }
+            return "Verified app exited."
+        case .window:
+            guard let (window, expected, minimized) = windowVerification else { throw Newtv1Failure("Window verification was unavailable.") }
+            defer { windowVerification = nil }
+            if minimized {
+                guard attribute(window, kAXMinimizedAttribute) as? Bool == true else { throw Newtv1Failure("Window did not minimize.") }
+            } else {
+                guard let expected, let actual = frame(window), abs(actual.minX - expected.minX) < 24, abs(actual.minY - expected.minY) < 24, abs(actual.width - expected.width) < 24, abs(actual.height - expected.height) < 24 else { throw Newtv1Failure("The app did not accept the requested window bounds. Inspect it before continuing.") }
+            }
+            return "Verified window geometry."
+        default: return "Dispatched; app-specific outcome is not automatically verified."
+        }
+    }
+
+    private func resolveAppName(_ name: String) -> String {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        if let exact = running.first(where: { $0.localizedName?.lowercased() == key }), let path = exact.bundleURL?.path { return path }
+        let words = key.split(separator: " ")
+        let matches = running.filter { app in
+            guard let label = app.localizedName?.lowercased() else { return false }
+            let parts = label.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            return !words.isEmpty && words.allSatisfy { parts.contains($0) }
+        }
+        if matches.count == 1, let path = matches[0].bundleURL?.path { return path }
+        let aliases = ["brave": "Brave Browser", "chrome": "Google Chrome", "vscode": "Visual Studio Code", "settings": "System Settings"]
+        return aliases[key] ?? name
+    }
+
     private func press(_ combo: String) throws {
         try requireAccessibility()
         let parts = combo.lowercased().replacingOccurrences(of: "+", with: " ").split(separator: " ").map(String.init)
@@ -233,7 +310,7 @@ final class Automation {
             "]":30,"o":31,"u":32,"[":33,"i":34,"p":35,"return":36,"enter":36,"l":37,"j":38,"'":39,"k":40,";":41,"\\":42,",":43,"/":44,"n":45,"m":46,".":47,"tab":48,"space":49,"`":50,"delete":51,"escape":53,"esc":53,"left":123,"right":124,"down":125,"up":126,"home":115,"end":119,"pageup":116,"pagedown":121,"forwarddelete":117,"f1":122,"f2":120,"f3":99,"f4":118,"f5":96,"f6":97,"f7":98,"f8":100,"f9":101,"f10":109,"f11":103,"f12":111]
         guard let key, let code = codes[key], let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true), let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { throw Newtv1Failure("Unknown key. Try “press command shift s” or “press return”.") }
         down.flags = flags; up.flags = flags
-        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        down.postForNewt(); up.postForNewt()
     }
 
     private func appElement() throws -> AXUIElement {
@@ -286,7 +363,7 @@ final class Automation {
         guard let rect = frame(element) else { throw Newtv1Failure("That control moved or disappeared. Show numbers again.") }
         let point = CGPoint(x: rect.midX, y: rect.midY)
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left), let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { throw Newtv1Failure("Cannot create mouse event.") }
-        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        down.postForNewt(); up.postForNewt()
     }
 
     func hideNumbers() { overlays.forEach { $0.close() }; overlays.removeAll(); targets.removeAll(); numberedPID = nil }
@@ -313,6 +390,7 @@ final class Automation {
         let window = value as! AXUIElement
         if position == "minimize" {
             guard AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success else { throw Newtv1Failure("This window cannot be minimized.") }
+            windowVerification = (window, nil, true)
             return
         }
         let current = frame(window) ?? .zero
@@ -334,6 +412,7 @@ final class Automation {
         let moved = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, p)
         let resized = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, s)
         guard moved == .success, resized == .success else { throw Newtv1Failure("This app restricts moving or resizing this window.") }
+        windowVerification = (window, CGRect(origin: point, size: size), false)
         hideNumbers()
     }
 }
@@ -350,5 +429,12 @@ private final class NumberOverlay: NSView {
             NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
             text.draw(at: CGPoint(x: rect.minX + 5, y: rect.minY + 4), withAttributes: attrs)
         }
+    }
+}
+
+private extension CGEvent {
+    func postForNewt() {
+        setIntegerValueField(.eventSourceUserData, value: 0x4E545631)
+        post(tap: .cghidEventTap)
     }
 }
