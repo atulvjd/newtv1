@@ -194,7 +194,7 @@ struct ConnectionsView: View {
                     Link("Open in service", destination: URL(string: preview.url)!).font(.system(size: 12))
                     Text(preview.title).font(.system(size: 19, weight: .medium))
                     ScrollView { Text(preview.text).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 220)
-                    Toggle("Use this content for one OpenAI request", isOn: $connections.approved).toggleStyle(.switch)
+                    Toggle("Use this content for one \(model.aiProvider.title) request", isOn: $connections.approved).toggleStyle(.switch)
                     TextField("Ask about this content…", text: $question).textFieldStyle(.roundedBorder)
                     Button("Ask Newt") { do { let context = try connections.consume(); model.requestBrain(question, mode: .answer, browserPage: context) } catch { connections.message = error.localizedDescription } }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(!connections.approved || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.pending != nil || model.capturingScreen)
                 }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))

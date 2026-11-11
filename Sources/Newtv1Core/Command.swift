@@ -141,7 +141,7 @@ public struct CommandParser {
         }
         for prefix in ["open ", "launch ", "switch to "] {
             if let value = argument(prefix) {
-                if value.contains("://") || (value.contains(".") && !value.contains(" ") && !value.hasSuffix(".app")) {
+                if value.contains("://") || (value.contains(".") && !value.contains(" ") && !value.lowercased().hasSuffix(".app")) {
                     return .openURL(value)
                 }
                 return .openApp(value)

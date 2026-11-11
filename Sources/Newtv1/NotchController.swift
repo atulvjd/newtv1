@@ -25,7 +25,7 @@ final class NotchController: ObservableObject {
     var showsBody: Bool { expanded || panelHeight > topHeight + 12 }
     var bodyVisibility: Double {
         let config = model.notch.normalized()
-        let target = config.expansionLayout == .horizontal ? config.horizontalHeight : config.contentHeight
+        let target = config.expansionLayout == .horizontal ? config.horizontalHeight + NotchGeometry.horizontalControlsHeight : config.contentHeight
         return min(max(Double(panelHeight - topHeight - 45) / max(1, min(125, target - 45)), 0), 1)
     }
 

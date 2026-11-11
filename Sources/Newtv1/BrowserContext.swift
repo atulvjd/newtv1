@@ -48,7 +48,7 @@ struct BrowserContextView: View {
                     Text(page.url).font(.system(size: 11)).foregroundStyle(model.notch.tint).textSelection(.enabled)
                     Text("Captured \(page.capturedAt.formatted()) · expires after 15 minutes").font(.system(size: 10)).foregroundStyle(.gray)
                     ScrollView { Text(page.text).font(.system(size: 11)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 240)
-                    Toggle("Use this preview for one OpenAI request", isOn: $browser.approved).toggleStyle(.switch)
+                    Toggle("Use this preview for one \(model.aiProvider.title) request", isOn: $browser.approved).toggleStyle(.switch)
                     TextField("Ask about this page…", text: $question).textFieldStyle(.roundedBorder)
                     Button("Ask Newt") {
                         do { let page = try browser.consume(); model.requestBrain(question, mode: .answer, browserPage: page) }

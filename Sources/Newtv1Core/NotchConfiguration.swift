@@ -186,6 +186,7 @@ public struct NotchConfiguration: Codable, Equatable {
 }
 
 public struct NotchGeometry {
+    public static let horizontalControlsHeight = 54.0
     public let frame: CGRect
     public let headerHeight: CGFloat
     public let cutoutWidth: CGFloat
@@ -201,7 +202,7 @@ public struct NotchGeometry {
         let expandedWidth = wide && config.fullWidthExpansion ? availableWidth : max(CGFloat(config.expandedWidth), restingWidth)
         let width = min(availableWidth, expanded ? expandedWidth : restingWidth)
         let topOffset = attached ? 0 : max(0, hardwareHeight) + CGFloat(config.floatingGap)
-        let bodyHeight = wide ? config.horizontalHeight : config.contentHeight
+        let bodyHeight = wide ? config.horizontalHeight + horizontalControlsHeight : config.contentHeight
         let height = min(max(1, screen.height - topOffset - 16), expanded ? header + CGFloat(bodyHeight) : header + 8)
         let center = attached ? (hardwareCenter ?? screen.midX) : screen.midX + CGFloat(config.horizontalOffset)
         let x = min(max(center - width / 2, screen.minX + 8), screen.maxX - width - 8)

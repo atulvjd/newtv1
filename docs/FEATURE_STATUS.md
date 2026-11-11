@@ -66,3 +66,9 @@ Refresh and select an item to preview locally. Only the explicit one-request app
 ## Local validation
 
 The packaged 0.6.0 release passed 41 regression groups / 422 assertions, extension JavaScript syntax, installer shell syntax, and four native-host malformed framing/input checks. Workspace UI was checked for Connections (Google and Slack setup), Utilities, routine editing and the rendered local 3D example. CPU/memory/disk/battery and current audio output populated on the machine. Account OAuth, cloud transcription/AI, Calendar and camera remain dependent on user setup and have not been claimed as live end-to-end successes.
+
+## Gemini support (0.6.1)
+
+The AI provider picker supports Gemini and OpenAI with separate Keychain credentials and model settings. Gemini uses native `generateContent`, JSON schemas for reviewed actions/guidance/diagrams, inline JPEG/WAV input, and Google Search grounding with linked sources. Provider switching stops active work/listening, revokes current sharing approvals, disables cloud transcription until re-enabled, and keeps follow-up context within the selected provider. Provider errors are sanitized; blocked, truncated and empty responses are rejected. The default Gemini model is `gemini-2.5-flash`.
+
+Validation on 7 November 2026: Gemini key accepted by Google's model endpoint; native Newtv1 live action planning produced a locally validated plan requiring review, and Google Search returned clickable source citations. The 0.6.1 package passes 42 groups / 441 assertions and signature verification. Multimodal request translation has local fixtures; no live microphone recording or private screen upload was used for these checks.

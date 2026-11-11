@@ -360,7 +360,13 @@ final class CommandTests {
         let bar = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
         XCTAssertEqual(bar.frame.minX, screen.minX + 8)
         XCTAssertEqual(bar.frame.maxX, screen.maxX - 8)
-        XCTAssertEqual(bar.frame.height, 198)
+        XCTAssertEqual(bar.frame.height, 198 + NotchGeometry.horizontalControlsHeight)
+        for rowHeight in [120.0, 260.0] {
+            var sized = config
+            sized.horizontalHeight = rowHeight
+            let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: sized)
+            XCTAssertEqual(layout.frame.height - layout.headerHeight - NotchGeometry.horizontalControlsHeight, rowHeight)
+        }
         let collapsed = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: false, configuration: config)
         XCTAssertEqual(collapsed.frame.width, 190 + config.wingWidth * 2)
         XCTAssertEqual(collapsed.frame.height, 46)
@@ -447,6 +453,111 @@ final class CommandTests {
         XCTAssertFalse(DictationControl.shouldStop("Newt stop dictation", custom: "Computer"))
     }
 
+    func testInstalledAppMatching() throws {
+        let insiders = InstalledApplication(name: "Code - Insiders", bundleID: "com.microsoft.VSCodeInsiders", path: "/Applications/Visual Studio Code - Insiders.app")
+        let stable = InstalledApplication(name: "Visual Studio Code", bundleID: "com.microsoft.VSCode", path: "/Applications/Visual Studio Code.app")
+        let safari = InstalledApplication(name: "Safari", bundleID: "com.apple.Safari", path: "/System/Applications/Safari.app")
+        let settings = InstalledApplication(name: "System Settings", bundleID: "com.apple.systempreferences", path: "/System/Applications/System Settings.app")
+        for name in ["vscode", "VS Code", "insider", "insiders", "code insiders", "Visual Studio Code - Insiders.app", insiders.path, insiders.bundleID] {
+            XCTAssertEqual(try ApplicationMatch.resolve(name, in: [safari, insiders]), insiders)
+        }
+        XCTAssertEqual(try ApplicationMatch.resolve("vscode", in: [insiders, stable]), stable)
+        XCTAssertEqual(try ApplicationMatch.resolve("insider", in: [stable, insiders]), insiders)
+        XCTAssertEqual(try ApplicationMatch.resolve("settings", in: [safari, settings]), settings)
+        XCTAssertEqual(try ApplicationMatch.resolve("SAFARI.app", in: [safari]), safari)
+        XCTAssertThrowsError(try ApplicationMatch.resolve("saf", in: [safari]))
+        XCTAssertThrowsError(try ApplicationMatch.resolve("all apps in the applications folder", in: [safari, insiders]))
+        XCTAssertThrowsError(try ApplicationMatch.resolve("", in: [safari]))
+        let duplicate = InstalledApplication(name: "Safari", bundleID: "com.apple.Safari", path: "/Applications/Safari.app")
+        XCTAssertThrowsError(try ApplicationMatch.resolve("Safari", in: [safari, duplicate]))
+        XCTAssertThrowsError(try ApplicationMatch.resolve("com.apple.Safari", in: [safari, duplicate]))
+        XCTAssertEqual(try ApplicationMatch.resolve(safari.path, in: [safari, duplicate]), safari)
+        let unicode = InstalledApplication(name: "Café Notes", bundleID: "test.notes", path: "/Applications/Café Notes.app")
+        XCTAssertEqual(try ApplicationMatch.resolve("cafe notes", in: [unicode]), unicode)
+    }
+
+    func testAcousticSpeechEndpoint() throws {
+        var endpoint = SpeechEndpoint(now: 0)
+        XCTAssertEqual(endpoint.state(now: 0), .waiting)
+        for sample in 1...30 {
+            let time = Double(sample) / 10
+            endpoint.observe(powerDB: -25, now: time)
+            if sample == 4 { endpoint.transcriptChanged(now: time) }
+            // A stalled transcript must not dispatch while the microphone still hears speech.
+            if sample > 2 { XCTAssertEqual(endpoint.state(now: time), .speaking) }
+        }
+        endpoint.observe(powerDB: -75, now: 3.1)
+        XCTAssertEqual(endpoint.state(now: 4.2), .pausing)
+        endpoint.transcriptChanged(now: 4.3)
+        XCTAssertEqual(endpoint.state(now: 4.5), .pausing)
+        XCTAssertEqual(endpoint.state(now: 5.8), .finished)
+
+        var resumed = SpeechEndpoint(silenceDuration: 1.4, now: 0)
+        for sample in 1...8 { resumed.observe(powerDB: -26, now: Double(sample) / 10) }
+        resumed.observe(powerDB: -75, now: 0.9)
+        XCTAssertEqual(resumed.state(now: 1.9), .pausing)
+        for sample in 20...26 { resumed.observe(powerDB: -26, now: Double(sample) / 10) }
+        XCTAssertEqual(resumed.state(now: 2.6), .speaking)
+        resumed.observe(powerDB: -75, now: 2.7)
+        XCTAssertEqual(resumed.state(now: 3.9), .pausing)
+        XCTAssertEqual(resumed.state(now: 4.1), .finished)
+
+        var noise = SpeechEndpoint(now: 0)
+        noise.observe(powerDB: -20, now: 0.05)
+        noise.observe(powerDB: -75, now: 0.1)
+        XCTAssertFalse(noise.hasSpeech)
+        XCTAssertEqual(noise.state(now: 2), .waiting)
+        XCTAssertEqual(noise.state(now: 12), .idleTimeout)
+        XCTAssertEqual(noise.state(now: 180), .durationLimit)
+        noise.observe(powerDB: .nan, now: 2)
+        noise.observe(powerDB: -20, now: .nan)
+        XCTAssertFalse(noise.hasSpeech)
+        XCTAssertEqual(SpeechEndpoint(silenceDuration: .nan, now: 0).silenceDuration, 1.4)
+        XCTAssertEqual(SpeechEndpoint(silenceDuration: 0.1, now: 0).silenceDuration, 0.6)
+        XCTAssertEqual(SpeechEndpoint(silenceDuration: 100, now: 0).silenceDuration, 3)
+
+        var slow = SpeechEndpoint(silenceDuration: 3, now: 0)
+        for sample in 1...10 { slow.observe(powerDB: -26, now: Double(sample) / 10) }
+        slow.observe(powerDB: -75, now: 1.1)
+        XCTAssertEqual(slow.state(now: 3.9), .pausing)
+        XCTAssertEqual(slow.state(now: 4.1), .finished)
+    }
+
+    func testGeminiProviderTranslation() throws {
+        let schema: [String: Any] = ["type": "object", "properties": ["commands": ["type": "array", "items": ["type": "string"]]], "required": ["commands"]]
+        let body: [String: Any] = ["model": "gemini-2.5-flash", "instructions": "Keep review required", "max_output_tokens": 2000,
+            "input": [["role": "assistant", "content": "Earlier reply"], ["role": "user", "content": [["type": "input_text", "text": "Explain"], ["type": "input_image", "image_url": "data:image/jpeg;base64,YQ=="]]]],
+            "text": ["format": ["schema": schema]]]
+        let converted = try GeminiPayload.request(body)
+        let turns = converted["contents"] as? [[String: Any]] ?? []
+        XCTAssertEqual(turns.first?["role"] as? String, "model")
+        XCTAssertEqual(turns.last?["role"] as? String, "user")
+        let parts = turns.last?["parts"] as? [[String: Any]] ?? []
+        XCTAssertEqual((parts.last?["inlineData"] as? [String: String])?["mimeType"], "image/jpeg")
+        let config = converted["generationConfig"] as? [String: Any] ?? [:]
+        XCTAssertEqual(config["responseMimeType"] as? String, "application/json")
+        XCTAssertTrue(config["responseJsonSchema"] != nil)
+        XCTAssertTrue(converted["tools"] == nil)
+        let search = try GeminiPayload.request(["input": "Find source", "tools": [["type": "web_search"]]])
+        XCTAssertTrue(search["tools"] != nil)
+        let audio = try GeminiPayload.request(["input": [["role": "user", "content": [["type": "input_audio", "data": "YQ=="]]]]])
+        XCTAssertTrue(audio["contents"] != nil)
+        XCTAssertThrowsError(try GeminiPayload.request(["input": [["role": "user", "content": [["type": "input_image", "image_url": "https://example.com/private"]]]]]))
+        let candidate: [String: Any] = ["finishReason": "STOP", "content": ["parts": [["text": "hidden reasoning", "thought": true], ["text": "Visible answer"]]], "groundingMetadata": ["groundingChunks": [["web": ["uri": "https://example.com/source", "title": "Source"]], ["web": ["uri": "javascript:alert(1)", "title": "Bad"]]]]]
+        let data = try JSONSerialization.data(withJSONObject: ["candidates": [candidate]])
+        let text = try GeminiPayload.response(data).text(markdown: true)
+        XCTAssertTrue(text.contains("Visible answer"))
+        XCTAssertTrue(text.contains("](https://example.com/source)"))
+        XCTAssertFalse(text.contains("hidden reasoning"))
+        XCTAssertFalse(text.contains("javascript:"))
+        for reason in ["MAX_TOKENS", "SAFETY", "RECITATION"] {
+            XCTAssertThrowsError(try GeminiPayload.response(JSONSerialization.data(withJSONObject: ["candidates": [["finishReason": reason, "content": ["parts": [["text": "partial"]]]]]])))
+        }
+        XCTAssertThrowsError(try GeminiPayload.response(Data("{}".utf8)))
+        XCTAssertEqual(AIProvider.gemini.defaultModel, "gemini-2.5-flash")
+        XCTAssertTrue(AIProvider.gemini.keyFlag != AIProvider.openAI.keyFlag)
+    }
+
     func testOAuthBoundaries() throws {
         XCTAssertEqual(OAuthFlow.challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
         let first = try OAuthFlow.randomToken(), second = try OAuthFlow.randomToken()
@@ -514,6 +625,9 @@ struct CoreChecks {
             ("screen guidance coordinate validation", suite.testScreenGuidanceValidation),
             ("dictation stop phrase boundaries", suite.testDictationStopDoesNotEatOrdinaryText),
             ("OAuth PKCE, state and encoding boundaries", suite.testOAuthBoundaries),
+            ("Gemini multimodal schema, grounding and refusal handling", suite.testGeminiProviderTranslation),
+            ("acoustic speech endpoints, pauses, noise, and timeouts", suite.testAcousticSpeechEndpoint),
+            ("installed app aliases, exact identities and ambiguity", suite.testInstalledAppMatching),
             ("conversation context bounds and modes", suite.testConversationContextBoundsAndModes)
         ]
         for (name, test) in cases {

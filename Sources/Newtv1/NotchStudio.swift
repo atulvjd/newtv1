@@ -71,19 +71,32 @@ struct NotchStudio: View {
                     }.font(.system(size: 11)).foregroundStyle(tint).padding(.horizontal, 24).frame(height: 30)
                         .background(model.notch.style == .attached ? Color.black : .clear)
                     if horizontal {
-                        HStack(spacing: 12) {
-                            Label("Newtv1", systemImage: "waveform").font(.system(size: 13, weight: .semibold)).foregroundStyle(tint)
-                            ScrollView(.horizontal) {
-                                HStack(alignment: .top, spacing: 12) {
-                                    ForEach(model.notch.normalized().visibleSections) { section in
-                                        ScrollView { NotchModule(section: section, model: model, speech: model.speech).padding(10) }
-                                            .frame(width: 220, height: max(80, model.notch.horizontalHeight - 28))
+                        VStack(spacing: 8) {
+                            GeometryReader { available in
+                                ScrollView(.horizontal) {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        ForEach(model.notch.normalized().visibleSections) { section in
+                                            ScrollView {
+                                                NotchModule(section: section, model: model, speech: model.speech).padding(10)
+                                            }
+                                            .frame(width: 220, height: max(1, available.size.height - 10))
+                                            .clipped()
                                             .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-                                    }
+                                        }
+                                    }.padding(.bottom, 10)
                                 }
+                                .frame(width: available.size.width, height: available.size.height)
+                                .clipped()
                             }
-                            Image(systemName: "mic.fill").foregroundStyle(.black).padding(12).background(tint, in: RoundedRectangle(cornerRadius: 8))
-                        }.padding(14).allowsHitTesting(false)
+                            Divider().overlay(tint.opacity(0.12))
+                            HStack {
+                                Label("Newtv1", systemImage: "waveform").font(.system(size: 13, weight: .semibold)).foregroundStyle(tint)
+                                Spacer()
+                                Text("Start listening").font(.system(size: 10, weight: .semibold)).foregroundStyle(.black).padding(.horizontal, 16).frame(height: 30).background(tint, in: RoundedRectangle(cornerRadius: 8))
+                                Image(systemName: "stop.circle").foregroundStyle(.orange)
+                                Image(systemName: "sparkles").foregroundStyle(tint)
+                            }.frame(height: 30)
+                        }.padding(10).allowsHitTesting(false)
                     } else {
                     HStack { Label("Newtv1", systemImage: "waveform").font(.system(size: 14, weight: .semibold)); Spacer(); Text("YOUR SPACE").font(.system(size: 7, design: .monospaced)).foregroundStyle(tint) }.padding(.horizontal, 18).padding(.vertical, 10)
                     ScrollView {
@@ -94,7 +107,7 @@ struct NotchStudio: View {
                     HStack { Label("Start listening", systemImage: "mic.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).padding(8).background(tint, in: RoundedRectangle(cornerRadius: 7)); Image(systemName: "stop.circle").foregroundStyle(.orange); Image(systemName: "sparkles").foregroundStyle(tint) }.padding(14)
                     }
                 }
-                .frame(width: width, height: horizontal ? model.notch.horizontalHeight + 30 : min(280, model.notch.contentHeight + 30))
+                .frame(width: width, height: horizontal ? model.notch.horizontalHeight + NotchGeometry.horizontalControlsHeight + 30 : min(280, model.notch.contentHeight + 30))
                 .background(NotchSurface(config: model.notch))
                 .clipShape(NotchShape(radius: model.notch.cornerRadius, floating: model.notch.style == .floating))
                 .padding(.top, model.notch.style == .floating ? 38 : 0)
@@ -136,7 +149,7 @@ struct NotchStudio: View {
             Picker("Expansion", selection: $model.notch.expansionLayout) { Text("Horizontal bar").tag(NotchExpansionLayout.horizontal); Text("Vertical panel").tag(NotchExpansionLayout.vertical) }.pickerStyle(.segmented)
             if model.notch.expansionLayout == .horizontal {
                 Toggle("Expand across the full display width", isOn: $model.notch.fullWidthExpansion)
-                slider("Horizontal bar height", value: $model.notch.horizontalHeight, range: 120...260, format: "%.0f pt")
+                slider("Horizontal module row height", value: $model.notch.horizontalHeight, range: 120...260, format: "%.0f pt")
             }
             Picker("Placement", selection: $model.notch.style) { Text("Attached to notch").tag(NotchStyle.attached); Text("Floating island").tag(NotchStyle.floating) }.pickerStyle(.segmented)
             Picker("Display", selection: $model.notch.displayID) {

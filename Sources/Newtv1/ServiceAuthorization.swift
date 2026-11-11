@@ -4,24 +4,34 @@ import Network
 import Security
 import Newtv1Core
 
+@MainActor
 struct ServiceSecrets {
+    private static var cachedCredentials: [String: Data] = [:]
+
     static func save(_ data: Data, account: String) throws {
+        cachedCredentials[account] = nil
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.newtv1.services", kSecAttrAccount as String: account]
         let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var add = query; add[kSecValueData as String] = data; add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { throw Newtv1Failure("Could not save this service credential in Keychain.") }
         } else if status != errSecSuccess { throw Newtv1Failure("Keychain denied the service credential update.") }
+        cachedCredentials[account] = data
     }
     static func load(_ account: String) throws -> Data? {
+        if let cached = cachedCredentials[account] { return cached }
         var value: CFTypeRef?
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.newtv1.services", kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         let status = SecItemCopyMatching(query as CFDictionary, &value)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw Newtv1Failure("Keychain access is required for this service. Reconnect it if needed.") }
-        return value as? Data
+        guard let data = value as? Data else { throw Newtv1Failure("Keychain returned an unreadable service credential.") }
+        cachedCredentials[account] = data
+        return data
     }
-    static func remove(_ account: String) { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.newtv1.services", kSecAttrAccount as String: account] as CFDictionary) }
+    static func remove(_ account: String) {
+        cachedCredentials[account] = nil
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.newtv1.services", kSecAttrAccount as String: account] as CFDictionary) }
 }
 
 final class ServiceHTTP: NSObject, URLSessionTaskDelegate {

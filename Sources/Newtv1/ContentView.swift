@@ -124,12 +124,12 @@ struct ContentView: View {
                     VoiceOrb(active: speech.isListening, level: speech.level, busy: model.busy || model.speechStarting, attention: model.error != nil, tint: model.notch.tint, animated: model.notch.animations).frame(width: 180, height: 180)
                     VStack(alignment: .leading, spacing: 13) {
                         Text(model.busy ? "Making it happen." : speech.isListening ? "I’m listening." : "Your voice is the shortcut.").font(.system(size: 26, weight: .medium)).tracking(-0.6)
-                        Text(speech.isListening ? (model.wakeWord ? "Start with “\(model.wakePhraseLabel)”, then say a command." : "Say a command, then pause to execute.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
+                        Text(speech.isListening ? (model.continuousListening && model.wakeWord ? "Start with “\(model.wakePhraseLabel)”, then say a command." : "Speak your full request, then pause to send.") : "Open apps, arrange windows, click controls,\nand build routines with a few words.")
                             .font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 12) {
                             Button { model.toggleListening() } label: {
-                                Label(model.speechStarting ? "Starting…" : speech.isListening ? "Stop listening" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black).padding(.horizontal, 16).padding(.vertical, 11).background(accent, in: RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain).disabled(model.speechStarting)
+                                Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black).padding(.horizontal, 16).padding(.vertical, 11).background(accent, in: RoundedRectangle(cornerRadius: 8))
+                            }.buttonStyle(.plain)
                             Text("⌥ Space").font(.system(size: 11, design: .monospaced)).foregroundStyle(muted)
                         }.padding(.top, 4)
                     }
@@ -212,7 +212,7 @@ struct ContentView: View {
                     Button("Ask") { model.requestBrain(model.input, mode: .answer) }.buttonStyle(.borderedProminent).foregroundStyle(.black)
                 }
             }.padding(16).background(surface, in: RoundedRectangle(cornerRadius: 12))
-            if !model.keyConfigured { Button("Connect OpenAI in Settings") { model.page = .settings }.buttonStyle(.bordered) }
+            if !model.keyConfigured { Button("Connect \(model.aiProvider.title) in Settings") { model.page = .settings }.buttonStyle(.bordered) }
             if model.brainAnswers.isEmpty {
                 Text("Try “ask why the sky is blue” or “research the latest Mac news” in the command center. Voice works too: “\(model.wakePhraseLabel), ask …”. Answers stay in memory for this session.").font(.system(size: 13)).foregroundStyle(muted).lineSpacing(5)
             }
@@ -266,17 +266,18 @@ struct ContentView: View {
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 18) {
                 CompanionPreferences(model: model)
-                HStack { Label("OpenAI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
-                Toggle("Use OpenAI for questions and natural-language actions", isOn: $model.useOpenAI).toggleStyle(.switch).disabled(!model.keyConfigured)
+                HStack { Label("AI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
+                Picker("Provider", selection: $model.aiProvider) { ForEach(AIProvider.allCases) { Text($0.title).tag($0) } }.disabled(model.busy || model.capturingScreen)
+                Toggle("Use \(model.aiProvider.title) for questions and natural-language actions", isOn: $model.useOpenAI).toggleStyle(.switch).disabled(!model.keyConfigured)
                 Toggle("Allow web search for answers", isOn: $model.allowWebSearch).toggleStyle(.switch)
-                HStack { Text("Model").font(.system(size: 12)); TextField("gpt-5.4-mini", text: $model.openAIModel).textFieldStyle(.roundedBorder) }
+                HStack { Text("Model").font(.system(size: 12)); TextField(model.aiProvider.defaultModel, text: $model.aiModel).textFieldStyle(.roundedBorder) }
                 HStack {
-                    SecureField(model.keyConfigured ? "Replace API key…" : "OpenAI API key…", text: $apiKey).textFieldStyle(.roundedBorder)
+                    SecureField(model.keyConfigured ? "Replace API key…" : model.aiProvider.title + " API key…", text: $apiKey).textFieldStyle(.roundedBorder)
                     Button("Save to Keychain") { do { try model.saveOpenAIKey(apiKey); apiKey = ""; keyMessage = "Key saved securely." } catch { apiKey = ""; keyMessage = error.localizedDescription } }.buttonStyle(.bordered).disabled(apiKey.isEmpty)
                     if model.keyConfigured { Button("Remove key") { do { try model.removeOpenAIKey(); keyMessage = "Key removed." } catch { keyMessage = error.localizedDescription } }.buttonStyle(.bordered) }
                 }
                 if let keyMessage { Text(keyMessage).font(.system(size: 11)).foregroundStyle(muted) }
-                Text("Questions and searches are sent to OpenAI; action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API requests and web searches use your API credits. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
+                Text("Questions and searches are sent to \(model.aiProvider.title); action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API requests and web searches use your API credits. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(spacing: 0) {
                 permissionRow(model.controlPermissionName, "Click controls, type, send shortcuts, and move windows.", model.accessibility) { model.requestAccessibility() }
@@ -301,7 +302,7 @@ struct ContentView: View {
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 10) {
                 Label("Local by default", systemImage: "lock.shield").font(.system(size: 14, weight: .medium)).foregroundStyle(accent)
-                Text("Direct commands and workflows run locally. The optional OpenAI brain uses your API key, stored in macOS Keychain. Recognition requires on-device support unless you enable Apple network recognition above. Recent activity and answers stay in memory; workflows and settings are saved on this Mac.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
+                Text("Direct commands and workflows run locally. The optional AI brain uses your API key, stored in macOS Keychain. Recognition requires on-device support unless you enable Apple network recognition above. Recent activity and answers stay in memory; workflows and settings are saved on this Mac.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
                 Text("Stop with ⌘. in Newtv1, the menu bar Stop action, or “\(model.wakePhraseLabel), stop”. Already completed actions cannot be undone automatically. Shell tasks run as your user, time out after 30 seconds, and must be reviewed on screen.").font(.system(size: 12)).foregroundStyle(muted).lineSpacing(5)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 14))
         }

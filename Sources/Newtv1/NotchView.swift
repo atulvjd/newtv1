@@ -83,16 +83,21 @@ struct NotchView: View {
                             }
                         }.padding(.horizontal, 20).padding(.bottom, 12).frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .clipped()
                     Divider().overlay(tint.opacity(0.12))
                     HStack(spacing: 9) {
                         Button { model.toggleListening() } label: {
-                            Label(model.speechStarting ? "Starting…" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
+                            Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
                                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).padding(.vertical, 10).background(tint, in: RoundedRectangle(cornerRadius: 9))
-                        }.buttonStyle(.plain).disabled(model.speechStarting)
+                        }.buttonStyle(.plain)
                         Button { model.stop(); speech.stop() } label: { Image(systemName: "stop.circle").font(.system(size: 17)).foregroundStyle(.orange).frame(width: 34, height: 34).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9)) }.buttonStyle(.plain).help("Stop all actions")
                         Button { model.openCommandCenter(page: .brain) } label: { Image(systemName: "sparkles").frame(width: 32, height: 34) }.buttonStyle(.plain).help("Open Brain")
                         Button { model.openCommandCenter(page: .companion) } label: { Image(systemName: "arrow.up.right.square").frame(width: 32, height: 34) }.buttonStyle(.plain).help("Open Newt companion")
                     }.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 14)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(Color.black)
                 }
                 }
                 }.frame(maxHeight: .infinity)
@@ -116,56 +121,92 @@ struct NotchView: View {
     }
 
     private var horizontalBody: some View {
+        VStack(spacing: 10) {
+            GeometryReader { available in
+                ScrollView(.horizontal, showsIndicators: true) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(config.visibleSections) { section in
+                            ScrollView(.vertical, showsIndicators: true) {
+                                NotchModule(section: section, model: model, speech: speech)
+                                    .padding(12)
+                            }
+                            .frame(width: section == .voice ? 290 : 240)
+                            .frame(height: max(1, available.size.height - 10))
+                            .contentShape(Rectangle())
+                            .clipped()
+                            .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .padding(.bottom, 10)
+                }
+                .frame(width: available.size.width, height: available.size.height)
+                .contentShape(Rectangle())
+                .clipped()
+            }
+            .frame(minHeight: 0, maxHeight: .infinity)
+            Divider().overlay(tint.opacity(0.12))
+            horizontalControls
+                .frame(height: 34)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+    }
+
+    private var horizontalControls: some View {
         HStack(spacing: 14) {
             if controller.panelWidth > 700 {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        NewtSignal(state: signalState, level: speech.level, tint: tint, animated: config.animations).frame(width: 25, height: 25)
-                        Text("Newtv1").font(.system(size: 17, weight: .semibold, design: .rounded))
+                HStack(spacing: 8) {
+                    NewtSignal(state: signalState, level: speech.level, tint: tint, animated: config.animations)
+                        .frame(width: 24, height: 24)
+                    Text("Newtv1").font(.system(size: 14, weight: .semibold, design: .rounded))
+                }
+                Menu {
+                    ForEach(AssistantMode.allCases) { mode in
+                        Button { model.assistantMode = mode } label: { Label(mode.title, systemImage: mode.icon) }
                     }
-                    Menu {
-                        ForEach(AssistantMode.allCases) { mode in
-                            Button { model.assistantMode = mode } label: { Label(mode.title, systemImage: mode.icon) }
-                        }
-                    } label: { Label(model.assistantMode.title, systemImage: model.assistantMode.icon).font(.system(size: 11)).foregroundStyle(tint) }
-                        .menuStyle(.borderlessButton)
-                    HStack(spacing: 16) {
-                        Button { model.openCommandCenter(page: .notch) } label: { Image(systemName: "slider.horizontal.3") }.help("Customize notch")
-                        Button { controller.togglePin() } label: { Image(systemName: controller.pinned ? "pin.fill" : "pin") }.foregroundStyle(controller.pinned ? tint : .gray).help("Pin expanded notch")
-                    }.buttonStyle(.plain)
-                }.frame(width: 150, alignment: .leading)
-                Rectangle().fill(tint.opacity(0.12)).frame(width: 1)
+                } label: {
+                    Label(model.assistantMode.title, systemImage: model.assistantMode.icon)
+                        .font(.system(size: 10)).foregroundStyle(tint)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(config.visibleSections) { section in
-                        ScrollView(.vertical, showsIndicators: false) {
-                            NotchModule(section: section, model: model, speech: speech)
-                                .padding(12)
-                        }
-                        .frame(width: section == .voice ? 290 : 240)
-                        .frame(maxHeight: .infinity)
-                        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                    }
-                }.frame(height: max(80, config.horizontalHeight - 28))
-            }.frame(maxWidth: .infinity)
-            Rectangle().fill(tint.opacity(0.12)).frame(width: 1)
-            VStack(spacing: 12) {
+            Button { model.openCommandCenter(page: .notch) } label: {
+                Image(systemName: "slider.horizontal.3")
+            }.help("Customize notch")
+            Button { controller.togglePin() } label: {
+                Image(systemName: controller.pinned ? "pin.fill" : "pin")
+                    .foregroundStyle(controller.pinned ? tint : .gray)
+            }.help("Pin expanded notch")
+            Spacer(minLength: 0)
+            Button { model.toggleListening() } label: {
+                Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .padding(.horizontal, 16)
+                    .frame(height: 34)
+                    .background(tint, in: RoundedRectangle(cornerRadius: 9))
+            }
+            Button { model.stop(); speech.stop() } label: {
+                Image(systemName: "stop.circle").foregroundStyle(.orange)
+            }.help("Stop all actions")
+            Button { model.openCommandCenter(page: .brain) } label: {
+                Image(systemName: "sparkles")
+            }.help("Open Brain")
+            Button { model.openCommandCenter(page: .companion) } label: {
+                Image(systemName: "arrow.up.right.square")
+            }.help("Open Newt companion")
+            if controller.panelWidth > 1000 {
+                Spacer(minLength: 0)
                 Text(model.busy ? "WORKING" : speaker.speaking ? "SPEAKING" : speech.isListening ? "LISTENING" : "READY")
-                    .font(.system(size: 8, design: .monospaced)).tracking(1.5).foregroundStyle(tint)
-                Button { model.toggleListening() } label: {
-                    Label(model.speechStarting ? "Starting…" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.black)
-                        .frame(maxWidth: .infinity).padding(.vertical, 11)
-                        .background(tint, in: RoundedRectangle(cornerRadius: 9))
-                }.buttonStyle(.plain).disabled(model.speechStarting)
-                HStack(spacing: 24) {
-                    Button { model.stop(); speech.stop() } label: { Image(systemName: "stop.circle").foregroundStyle(.orange) }.help("Stop all actions")
-                    Button { model.openCommandCenter(page: .brain) } label: { Image(systemName: "sparkles") }.help("Open Brain")
-                    Button { model.openCommandCenter(page: .companion) } label: { Image(systemName: "arrow.up.right.square") }.help("Open Newt companion")
-                }.buttonStyle(.plain).font(.system(size: 16))
-            }.frame(width: controller.panelWidth > 700 ? 185 : 145)
-        }.padding(.horizontal, 18).padding(.vertical, 14)
+                    .font(.system(size: 8, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundStyle(tint)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var signalState: NewtSignalState {
@@ -231,6 +272,7 @@ struct NotchModule: View {
         case .voice:
             Text(model.error != nil ? "Needs your attention" : model.busy ? "Making it happen." : model.assistantMode == .dictate ? "Dictating into \(model.targetName)" : speech.isListening ? "I'm listening." : "Newt, at your side.").font(.system(size: 18, weight: .medium)).tracking(-0.4)
             Text(model.error ?? (speech.transcript.isEmpty ? model.assistantMode.hint : speech.transcript)).font(.system(size: 11)).foregroundStyle(model.error != nil ? Color.orange : .gray).lineLimit(3)
+            if speech.isListening { Text(speech.status).font(.system(size: 10)).foregroundStyle(tint) }
             Button(model.accessibility ? "Target: \(model.targetName)" : "Set up Accessibility") { model.openCommandCenter(page: model.accessibility ? .control : .settings) }.font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(.gray)
         case .shortcuts:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 98), spacing: 7)], spacing: 7) {

@@ -12,6 +12,8 @@ struct CompanionView: View {
     @ObservedObject var speaker: AnswerSpeaker
     @CompanionState private var prompt = ""
     @CompanionState private var guidedConsent = false
+    @CompanionState private var correctedTranscript = ""
+    @CompanionState private var correctingTranscript = false
     private var tint: Color { model.notch.tint }
     private let card = Color.white.opacity(0.035)
 
@@ -38,7 +40,7 @@ struct CompanionView: View {
             if model.assistantMode == .agent {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { Text("Guided observe / act").font(.system(size: 15, weight: .medium)); Spacer(); Button("Preview controls locally") { model.previewAgentControls() } }
-                    Text("For this task, share up to eight observations of the target app’s window title and accessible control labels with OpenAI. Every next action requires review. Field values and screenshots are excluded; visible labels may still contain private text.").font(.system(size: 11)).foregroundStyle(.gray)
+                    Text("For this task, share up to eight observations of the target app’s window title and accessible control labels with \(model.aiProvider.title). Every next action requires review. Field values and screenshots are excluded; visible labels may still contain private text.").font(.system(size: 11)).foregroundStyle(.gray)
                     if !model.guidedObservationPreview.isEmpty { ScrollView { Text(model.guidedObservationPreview).font(.system(size: 10, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 100) }
                     Toggle("Allow these observations for my next typed task", isOn: $guidedConsent).font(.system(size: 12)).toggleStyle(.switch)
                 }.padding(18).background(card, in: RoundedRectangle(cornerRadius: 12))
@@ -61,12 +63,35 @@ struct CompanionView: View {
                     }.padding(12).background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 10))
                 }
                 HStack(spacing: 10) {
-                    Button { model.toggleListening() } label: { Label(model.speechStarting ? "Starting…" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(model.speechStarting)
-                    Text(model.pushToTalk ? "Hold ⌥ Space · release to send" : "⌥ Space · say \(model.wakePhraseLabel) first").font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray)
+                    Button { model.toggleListening() } label: { Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                    Text(speech.status != "Microphone off" ? speech.status : model.pushToTalk ? "Hold ⌥ Space · release to send" : model.continuousListening ? "⌥ Space · say \(model.wakePhraseLabel) first" : "⌥ Space · speak, then pause to send").font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray)
                     Spacer()
+                    if speech.isListening { Button("Send now") { speech.finishUtterance() }.buttonStyle(.bordered) }
                     if model.busy || speaker.speaking { Button("Stop") { model.stop(); speech.stop() }.buttonStyle(.bordered).foregroundStyle(.orange) }
                 }
-                if !speech.transcript.isEmpty { Text(speech.transcript).font(.system(size: 13)).foregroundStyle(tint).lineLimit(3) }
+                if !speech.transcript.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Heard request").font(.system(size: 10, weight: .medium)).foregroundStyle(.gray)
+                        Text(speech.transcript).font(.system(size: 13)).foregroundStyle(tint).textSelection(.enabled)
+                        if model.assistantMode != .dictate, !speech.isListening, !model.speechStarting {
+                            Button("Correct and retry") {
+                                correctedTranscript = speech.transcript
+                                correctingTranscript = true
+                            }.buttonStyle(.bordered).disabled(model.busy || model.pending != nil || model.capturingScreen)
+                        }
+                        if correctingTranscript {
+                            TextField("Correct your request…", text: $correctedTranscript).textFieldStyle(.roundedBorder)
+                            HStack {
+                                Button("Run corrected request") {
+                                    model.retryVoiceTranscript(correctedTranscript)
+                                    correctingTranscript = false
+                                }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                                    .disabled(correctedTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.pending != nil || model.capturingScreen || speech.isListening)
+                                Button("Cancel") { correctingTranscript = false }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
                 if model.assistantMode == .talk || model.assistantMode == .guide {
                     HStack {
                         Toggle("Spoken replies", isOn: $model.speakAnswers).toggleStyle(.switch).controlSize(.mini).font(.system(size: 11)).fixedSize()
@@ -103,6 +128,10 @@ struct CompanionView: View {
                 Button("Permission setup") { model.openCommandCenter(page: .settings) }.buttonStyle(.plain)
             }.font(.system(size: 11)).foregroundStyle(model.accessibility ? .gray : .orange)
         }.tint(tint)
+            .onChange(of: speech.isListening) { listening in
+                if listening { correctingTranscript = false }
+            }
+            .onChange(of: model.assistantMode) { _ in correctingTranscript = false }
     }
 
     private var screenTools: some View {
@@ -112,7 +141,7 @@ struct CompanionView: View {
                 Spacer()
                 Text(model.capturedScreen == nil ? "OFF UNTIL REQUESTED" : "LOCAL PREVIEW · NOT SENT").font(.system(size: 8, design: .monospaced)).foregroundStyle(tint)
             }
-            Text("Capture is manual. Review the image, then explicitly allow it for one OpenAI request. Other app windows may contain private information; cancel or close them before sharing.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(4)
+            Text("Capture is manual. Review the image, then explicitly allow it for one \(model.aiProvider.title) request. Other app windows may contain private information; cancel or close them before sharing.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(4)
             HStack {
                 Picker("Display", selection: $model.screenDisplayChoice) { Text("Display under pointer").tag("pointer"); ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { _, screen in Text(screen.localizedName).tag(String(ScreenContext.id(screen))) } }
                 Button(model.capturingScreen ? "Preparing…" : "Capture preview") { model.guideQuestion = prompt; model.captureScreenForReview() }.buttonStyle(.bordered).disabled(model.capturingScreen || model.busy)
@@ -179,8 +208,16 @@ struct CompanionPreferences: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 17) {
             Label("Companion & voice", systemImage: "bubble.left.and.bubble.right").font(.system(size: 17, weight: .medium))
-            Toggle("Automatic language recognition through OpenAI", isOn: $model.automaticLanguage)
-            if model.automaticLanguage { Text("While listening, speech segments are sent to OpenAI before the wake phrase is checked. API charges apply. Hold-to-talk limits capture to each key press; continuous listening uses silence detection. Recognition pauses while each segment uploads. Turn this off for local Apple recognition.").font(.system(size: 11)).foregroundStyle(.orange) }
+            Toggle("Keep listening for more requests", isOn: $model.continuousListening)
+            Text("With this off, Newt captures one request, stops the microphone after you finish, and runs it. Dictate mode continues until you stop it. Press Start listening or Option–Space and speak directly. Continuous listening uses your wake-phrase setting.").font(.system(size: 11)).foregroundStyle(.gray)
+            HStack {
+                Text("Pause before sending")
+                Slider(value: $model.speechPauseDuration, in: 0.6...3, step: 0.1)
+                Text(String(format: "%.1f s", model.speechPauseDuration)).monospacedDigit().frame(width: 45)
+            }
+            Text("Newt waits for quiet audio and a stable transcript. Increase this pause if you think between phrases.").font(.system(size: 11)).foregroundStyle(.gray)
+            Toggle("Automatic language recognition through \(model.aiProvider.title)", isOn: $model.automaticLanguage)
+            if model.automaticLanguage { Text("While listening, speech segments are sent to \(model.aiProvider.title) before the wake phrase is checked. API charges apply. Hold-to-talk limits capture to each key press; continuous listening uses silence detection. Recognition pauses while each segment uploads. Turn this off for local Apple recognition.").font(.system(size: 11)).foregroundStyle(.orange) }
             Picker("Mode", selection: $model.assistantMode) { ForEach(AssistantMode.allCases) { Text($0.title).tag($0) } }
             Toggle("Show live captions for spoken replies", isOn: $spokenCaptions)
             Toggle("Hold Option–Space to talk; release to send", isOn: $model.pushToTalk)

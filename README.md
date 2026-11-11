@@ -14,7 +14,7 @@ Open **Companion** from the sidebar or notch window button. Its mode cards and t
 | Dictate | Insert recognized speech into the last active app's focused field |
 | Agent | Translate a task into a reviewed plan and show execution in Tasks |
 
-**Settings → Companion & voice** has recognition language, vocabulary, push-to-talk, installed Mac voices, playback speed, and local-memory controls. Hold-to-talk uses Option–Space and sends on release without a wake phrase. The normal listening button follows the wake-phrase setting. Continuous Dictate inserts text after each pause; say “Newt, stop dictation” (or your custom phrase) to end it. Switch to the destination field before starting.
+**Settings → Companion & voice** has recognition language, vocabulary, push-to-talk, installed Mac voices, playback speed, and local-memory controls. Hold-to-talk uses Option–Space and sends on release without a wake phrase. The normal listening button captures one request and automatically stops after you finish. Settings includes a 0.6–3 second pause control, with 1.4 seconds as the default. Enable Keep listening for more requests for continuous wake-phrase operation. Continuous Dictate inserts text after each pause; say “Newt, stop dictation” (or your custom phrase) to end it. Switch to the destination field before starting.
 
 Spoken replies are opt-in. Recognition pauses during playback and resumes only if it was already listening. Starting to talk interrupts playback. Languages and on-device availability depend on Apple; network recognition remains separately opt-in. This is not a streaming audio-to-audio service.
 
@@ -92,7 +92,7 @@ This project uses an ad hoc development signature when `NEWTV1_SIGN_IDENTITY` is
 
 Newtv1 checks whether an entire expanded command plan needs Mac control access **before executing its first step**. A blocked workflow opens setup instead of launching apps and then failing on its first window action. A pending request can be retried manually after access is detected; granting access does not execute it automatically. Stopping or quitting the app discards the waiting request.
 
-Listening must be manually enabled. The wake phrase is a prefix check over transcribed speech, not a dedicated low-power keyword detector. While listening, the audio engine is active even when no wake phrase is spoken. There is a short pause between utterances while the recognition session resets. Do not use Newtv1 where accidental voice activation would have serious consequences.
+Listening starts manually. Single-request capture accepts speech directly, waits for quiet audio and a stable transcript, finalizes recognition, then stops the microphone and submits once. Continuous listening applies the configured wake phrase. Local recognition preserves text across recognition segments. Cloud recording retains bounded segments and transcribes them together after you finish. Initial silence stops capture after 12 seconds. Requests have a three-minute recording limit, which shows an error before executing an incomplete request. Microphone power guides pause detection and can be affected by background voices or noise.
 
 **Option–Space** toggles the microphone. **Command–period** inside Newtv1 stops execution. The menu bar also has **Stop All Actions**. While listening, **“Newt, stop”** cancels the current task and stops listening. Completed actions are not rolled back. An action already submitted to another app may still finish.
 
@@ -224,3 +224,11 @@ See [the current feature checklist and browser installation steps](docs/FEATURE_
 ### Connected services
 
 Connections now includes read-only Gmail, Google Drive, Google Calendar, Slack and Notion viewers, with Keychain credentials, local content previews and explicit one-request AI sharing. Google requires your Desktop OAuth client; Slack and Notion require integration tokens and granted content access. Outlook and OneDrive are excluded as requested. See [setup and current limits](docs/FEATURE_STATUS.md#service-setup).
+
+### Gemini provider (0.6.1)
+
+Settings → AI brain now selects OpenAI or Gemini, with separate Keychain credentials and model settings. Gemini defaults to `gemini-2.5-flash` and uses Google's native API for answers, Google Search grounding, reviewed command planning, screen guidance, diagrams and optional audio transcription. Existing action, image and diagram validation still applies. Provider changes stop active listening/work and clear content-sharing approvals; conversational context is limited to the selected provider. Existing history without a provider is treated as OpenAI history.
+
+Save a Gemini key in Settings, or use the built setup helper with `Newtv1Setup /absolute/path/to/Newtv1.app --gemini --verify` and enter the key through hidden stdin. Keys never belong in source code or the browser extension. Automatic audio transcription sends recordings to the selected provider only when explicitly enabled. Local Apple speech recognition remains the default.
+
+Implementation references: [Gemini generateContent](https://ai.google.dev/api/generate-content), [structured output](https://ai.google.dev/gemini-api/docs/structured-output), and [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search).

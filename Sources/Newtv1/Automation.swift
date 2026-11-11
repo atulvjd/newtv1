@@ -87,6 +87,15 @@ final class Automation {
     private var numberedPID: pid_t?
     private var overlays: [NSPanel] = []
     let runner = ProcessRunner()
+    private let applicationCatalog = ApplicationCatalog()
+    private var openedApplication: NSRunningApplication?
+    private var quittingApplication: NSRunningApplication?
+
+    func validateAppTargets(in plan: CommandPlan) throws {
+        for action in plan.actions {
+            if case .openApp(let name) = action { _ = try applicationCatalog.resolve(name) }
+        }
+    }
     private var windowVerification: (AXUIElement, CGRect?, Bool)?
     private var globalInterrupt: Any?
     private var localInterrupt: Any?
@@ -136,15 +145,37 @@ final class Automation {
         try Task.checkCancellation()
         switch action {
         case .openApp(let name):
-            let resolved = resolveAppName(name)
-            _ = try await runner.run("/usr/bin/open", ["-a", resolved])
-            try await Task.sleep(nanoseconds: 500_000_000)
-            if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { targetApp = front }
+            let application = try applicationCatalog.resolve(name)
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            let launched = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: application.path), configuration: configuration)
+            openedApplication = launched
+            try Task.checkCancellation()
+            guard !launched.isTerminated, launched.bundleIdentifier == application.bundleID else {
+                throw Newtv1Failure("The requested app did not finish launching. Check it and try again.")
+            }
+            targetApp = launched
+            return "Opened " + (launched.localizedName ?? application.name) + ". Verified the requested app is running."
         case .quitApp(let name):
-            let matches = NSWorkspace.shared.runningApplications.filter { $0.localizedName?.localizedCaseInsensitiveCompare(name) == .orderedSame }
-            guard matches.count == 1, let app = matches.first else { throw Newtv1Failure("Could not uniquely find running app “\(name)”.") }
+            let running = NSWorkspace.shared.runningApplications
+            let candidates = running.compactMap { app -> InstalledApplication? in
+                guard let url = app.bundleURL, let identifier = app.bundleIdentifier else { return nil }
+                return InstalledApplication(name: app.localizedName ?? url.deletingPathExtension().lastPathComponent, bundleID: identifier, path: url.path)
+            }
+            let match = try ApplicationMatch.resolve(name, in: candidates)
+            guard let app = running.first(where: { $0.bundleURL?.path == match.path }) else { throw Newtv1Failure("The requested app is no longer running.") }
             guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { throw Newtv1Failure("Use Newtv1’s menu to quit Newtv1.") }
+            quittingApplication = app
             guard app.terminate() else { throw Newtv1Failure("The app declined to quit. Check it for an unsaved document dialog.") }
+            for _ in 0..<30 {
+                try Task.checkCancellation()
+                if app.isTerminated { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard app.isTerminated else {
+                throw Newtv1Failure("The app is waiting to quit. Check for an unsaved document dialog before continuing.")
+            }
+            return "Verified " + (app.localizedName ?? match.name) + " exited."
         case .openURL(let raw):
             let value = raw.contains("://") ? raw : "https://\(raw)"
             guard let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty else { throw Newtv1Failure("Use a valid http or https address.") }
@@ -255,12 +286,15 @@ final class Automation {
 
     func verify(_ action: Action) throws -> String {
         switch action {
-        case .openApp(let name):
-            let resolved = resolveAppName(name)
-            guard NSWorkspace.shared.runningApplications.contains(where: { $0.localizedName?.localizedCaseInsensitiveCompare(resolved) == .orderedSame }) else { throw Newtv1Failure("Verification failed: \(resolved) is not running.") }
-            return "Verified app is running."
-        case .quitApp(let name):
-            guard !NSWorkspace.shared.runningApplications.contains(where: { $0.localizedName?.localizedCaseInsensitiveCompare(name) == .orderedSame }) else { throw Newtv1Failure("App is still running. Check for an unsaved document or confirmation dialog before continuing.") }
+        case .openApp:
+            guard let app = openedApplication, !app.isTerminated else {
+                throw Newtv1Failure("The requested app is no longer running.")
+            }
+            return "Verified " + (app.localizedName ?? "requested app") + " is running."
+        case .quitApp:
+            guard let app = quittingApplication, app.isTerminated else {
+                throw Newtv1Failure("App is still running. Check for an unsaved document or confirmation dialog before continuing.")
+            }
             return "Verified app exited."
         case .window:
             guard let (window, expected, minimized) = windowVerification else { throw Newtv1Failure("Window verification was unavailable.") }
@@ -273,21 +307,6 @@ final class Automation {
             return "Verified window geometry."
         default: return "Dispatched; app-specific outcome is not automatically verified."
         }
-    }
-
-    private func resolveAppName(_ name: String) -> String {
-        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-        if let exact = running.first(where: { $0.localizedName?.lowercased() == key }), let path = exact.bundleURL?.path { return path }
-        let words = key.split(separator: " ")
-        let matches = running.filter { app in
-            guard let label = app.localizedName?.lowercased() else { return false }
-            let parts = label.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            return !words.isEmpty && words.allSatisfy { parts.contains($0) }
-        }
-        if matches.count == 1, let path = matches[0].bundleURL?.path { return path }
-        let aliases = ["brave": "Brave Browser", "chrome": "Google Chrome", "vscode": "Visual Studio Code", "settings": "System Settings"]
-        return aliases[key] ?? name
     }
 
     private func press(_ combo: String) throws {

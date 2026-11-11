@@ -10,7 +10,7 @@ public enum AssistantMode: String, Codable, CaseIterable, Identifiable {
     public var hint: String {
         switch self {
         case .command: return "Direct, local Mac commands and saved workflows."
-        case .talk: return "Ask questions and hear answers. Add screen context only when you choose."
+        case .talk: return "Ask questions or describe a task. Review proposed actions before running them."
         case .guide: return "Preview a screen, ask for help, then show numbered visual guidance."
         case .dictate: return "Speak directly into the last active app. Newt, stop dictation ends it."
         case .agent: return "Describe a task, review its plan, and follow each step."

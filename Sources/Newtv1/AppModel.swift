@@ -19,6 +19,7 @@ struct BrainAnswer: Identifiable, Codable {
     var id = UUID()
     let question: String
     let markdown: String
+    var provider: String? = nil
 }
 
 struct AgentJob: Identifiable, Codable {
@@ -61,9 +62,17 @@ final class AppModel: ObservableObject {
     @Published var microphone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @Published var speechPermission = SFSpeechRecognizer.authorizationStatus() == .authorized
     @Published var speechStarting = false
+    private var speechStartTask: Task<Void, Never>?
+    private var speechStartID = UUID()
     @Published var brainAnswers: [BrainAnswer] = []
     @Published var assistantMode: AssistantMode { didSet { UserDefaults.standard.set(assistantMode.rawValue, forKey: "assistantMode"); speech.stop(); speaker.stop() } }
     @Published var automaticLanguage: Bool { didSet { UserDefaults.standard.set(automaticLanguage, forKey: "automaticLanguage"); speech.stop() } }
+    @Published var continuousListening: Bool {
+        didSet { UserDefaults.standard.set(continuousListening, forKey: "continuousListening"); speech.stop() }
+    }
+    @Published var speechPauseDuration: Double {
+        didSet { UserDefaults.standard.set(speechPauseDuration, forKey: "speechPauseDuration"); speech.stop() }
+    }
     @Published var speechLocale: String { didSet { UserDefaults.standard.set(speechLocale, forKey: "speechLocale"); speech.stop() } }
     @Published var vocabulary: String { didSet { UserDefaults.standard.set(vocabulary, forKey: "vocabulary"); speech.stop() } }
     @Published var speakAnswers: Bool { didSet { UserDefaults.standard.set(speakAnswers, forKey: "speakAnswers") } }
@@ -114,6 +123,20 @@ final class AppModel: ObservableObject {
     @Published var keyConfigured: Bool
     @Published var useOpenAI: Bool { didSet { UserDefaults.standard.set(useOpenAI, forKey: "useOpenAI") } }
     @Published var allowWebSearch: Bool { didSet { UserDefaults.standard.set(allowWebSearch, forKey: "allowWebSearch") } }
+    @Published var aiProvider: AIProvider {
+        didSet {
+            guard aiProvider != oldValue else { return }
+            stop(); speech.stop(); automaticLanguage = false
+            browser.approved = false; connections.approved = false
+            UserDefaults.standard.set(aiProvider.rawValue, forKey: "aiProvider")
+            keyConfigured = UserDefaults.standard.bool(forKey: aiProvider.keyFlag)
+        }
+    }
+    @Published var geminiModel: String { didSet { UserDefaults.standard.set(geminiModel, forKey: "geminiModel") } }
+    var aiModel: String {
+        get { aiProvider == .gemini ? geminiModel : openAIModel }
+        set { if aiProvider == .gemini { geminiModel = newValue } else { openAIModel = newValue } }
+    }
     @Published var openAIModel: String { didSet { UserDefaults.standard.set(openAIModel, forKey: "openAIModel") } }
     @Published var useLocalPlanner: Bool { didSet { UserDefaults.standard.set(useLocalPlanner, forKey: "useLocalPlanner") } }
     @Published var localModel: String { didSet { UserDefaults.standard.set(localModel, forKey: "localModel") } }
@@ -138,6 +161,9 @@ final class AppModel: ObservableObject {
         let defaults = UserDefaults.standard
         assistantMode = AssistantMode(rawValue: defaults.string(forKey: "assistantMode") ?? "") ?? .command
         automaticLanguage = defaults.bool(forKey: "automaticLanguage")
+        continuousListening = defaults.bool(forKey: "continuousListening")
+        let savedPause = defaults.object(forKey: "speechPauseDuration") as? Double ?? 1.4
+        speechPauseDuration = savedPause.isFinite ? min(3, max(0.6, savedPause)) : 1.4
         speechLocale = defaults.string(forKey: "speechLocale") ?? "en-US"
         vocabulary = defaults.string(forKey: "vocabulary") ?? ""
         speakAnswers = defaults.bool(forKey: "speakAnswers")
@@ -148,7 +174,10 @@ final class AppModel: ObservableObject {
         notch = defaults.data(forKey: "notchConfiguration").flatMap { try? NotchConfiguration.profile($0) } ?? NotchConfiguration()
         scratchpad = defaults.string(forKey: "notchScratchpad") ?? ""
         customWakePhrase = defaults.string(forKey: "customWakePhrase") ?? ""
-        keyConfigured = defaults.bool(forKey: "openAIKeyConfigured")
+        let provider = AIProvider(rawValue: defaults.string(forKey: "aiProvider") ?? "") ?? .openAI
+        aiProvider = provider
+        geminiModel = defaults.string(forKey: "geminiModel") ?? AIProvider.gemini.defaultModel
+        keyConfigured = defaults.bool(forKey: provider.keyFlag)
         useOpenAI = defaults.bool(forKey: "useOpenAI")
         allowWebSearch = defaults.object(forKey: "allowWebSearch") as? Bool ?? true
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.4-mini"
@@ -234,36 +263,84 @@ final class AppModel: ObservableObject {
     func cancelNotchTimer() { notchTimerEnd = nil; notchTimerFinished = false }
 
     func toggleListening() {
-        guard !speechStarting, !capturingScreen else { return }
-        if speech.isListening { speech.stop() }
-        else { startListening(hold: false) }
+        if speechStarting || speech.isListening {
+            cancelListening()
+            return
+        }
+        guard !capturingScreen else { return }
+        startListening(hold: false)
     }
 
     private func startListening(hold: Bool) {
             guard !speechStarting else { return }
+            guard !busy, pending == nil else {
+                error = "Finish or stop the current task before starting another voice request."
+                return
+            }
+            error = nil
             if assistantMode == .dictate, !AXIsProcessTrusted() {
                 accessibilityIssue = true; error = "Dictation needs Mac control access to type into another app."; openCommandCenter(page: .settings); return
             }
-            if automaticLanguage, !useOpenAI || !keyConfigured { error = "Automatic language recognition sends audio to OpenAI. Connect the API key in Settings first."; return }
+            if automaticLanguage, !useOpenAI || !keyConfigured { error = "Automatic language recognition sends audio to \(aiProvider.title). Connect the API key in Settings first."; return }
             speaker.stop()
             speech.automaticLanguage = automaticLanguage
+            let provider = aiProvider, transcriptionModel = aiModel
             speech.transcribeAudio = { audio in
-                guard let key = try KeychainStore.load() else { throw Newtv1Failure("Save your API key in Settings first.") }
-                return try await OpenAIBrain().transcribe(wav: audio, key: key)
+                guard let key = try KeychainStore.load(provider: provider) else { throw Newtv1Failure("Save your API key in Settings first.") }
+                return try await OpenAIBrain(provider: provider).transcribe(wav: audio, key: key, model: transcriptionModel)
             }
-            armedByHotkey = hold
+            armedByHotkey = hold || (assistantMode != .dictate && !continuousListening)
             speechStarting = true
             speech.wakePhrases = VoiceCommand.recognitionPhrases(custom: customWakePhrase)
             speech.localeIdentifier = speechLocale
             speech.vocabulary = vocabulary.components(separatedBy: .newlines).map { String($0.prefix(80)) }.filter { !$0.isEmpty }
             speech.dictation = assistantMode == .dictate
             speech.submitsOnPause = !hold
-            Task { await speech.start(allowNetwork: allowNetwork); speechStarting = false; refreshPermissions(); if hold, !hotkeyHeld { speech.finishUtterance() } }
+            speech.continuousListening = assistantMode == .dictate || continuousListening
+            speech.silenceDuration = speechPauseDuration
+            let startID = UUID()
+            speechStartID = startID
+            speechStartTask = Task { [weak self] in
+                guard let self else { return }
+                await self.speech.start(allowNetwork: self.allowNetwork)
+                guard self.speechStartID == startID else { return }
+                self.speechStarting = false
+                self.speechStartTask = nil
+                self.refreshPermissions()
+                if hold, !self.hotkeyHeld { self.speech.finishUtterance() }
+            }
     }
+    private func cancelListening() {
+        speechStartID = UUID()
+        speechStartTask?.cancel()
+        speechStartTask = nil
+        speechStarting = false
+        armedByHotkey = false
+        speech.stop()
+    }
+
+    func retryVoiceTranscript(_ corrected: String) {
+        let text = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 16000 else {
+            error = "Keep the corrected request between 1 and 16,000 characters."
+            return
+        }
+        guard !busy, !capturingScreen, pending == nil else {
+            error = "Finish or stop the current task before retrying this request."
+            return
+        }
+        cancelListening()
+        error = nil
+        armedByHotkey = true
+        receiveVoice(text)
+    }
+
     private func hotkeyDown() {
         hotkeyHeld = true
-        if pushToTalk { if !speechStarting { speech.stop(); startListening(hold: true) } }
-        else { toggleListening() }
+        if pushToTalk {
+            cancelListening()
+            startListening(hold: true)
+        } else { toggleListening() }
     }
     private func hotkeyUp() {
         hotkeyHeld = false
@@ -279,7 +356,10 @@ final class AppModel: ObservableObject {
         }
         let explicitlyArmed = armedByHotkey
         armedByHotkey = false
-        guard let text = VoiceCommand.extract(raw, requireWakePhrase: wakeWord && !explicitlyArmed, custom: customWakePhrase) else { return }
+        guard let text = VoiceCommand.extract(raw, requireWakePhrase: wakeWord && !explicitlyArmed, custom: customWakePhrase) else {
+            error = "No command followed the wake phrase. Say “\(wakePhraseLabel), open Safari”, or use single-request listening."
+            return
+        }
         let lower = text.lowercased().trimmingCharacters(in: .punctuationCharacters)
         if ["stop", "stop listening", "cancel everything"].contains(lower) { stop(); speech.stop(); return }
         if lower == "cancel" { cancelPendingPlan(); return }
@@ -292,20 +372,20 @@ final class AppModel: ObservableObject {
             if let pending, !pending.requiresReview, !pending.actions.contains(where: { if case .shell = $0 { return true }; return false }) { approve() }
             return
         }
-        guard !busy, pending == nil else { return }
+        guard !busy, pending == nil else {
+            error = "Your words were captured while another request was active. Finish it, then use Correct and retry."
+            return
+        }
         processCompanionInput(text)
     }
 
     func processCompanionInput(_ text: String) {
         switch assistantMode {
         case .command: submit(text)
-        case .talk: requestBrain(text, mode: .answer)
+        case .talk: requestBrain(text, mode: .decide)
         case .guide: guideQuestion = text; captureScreenForReview()
         case .dictate: error = "Start listening in Dictate mode to insert speech into your target app."
-        case .agent:
-            if useOpenAI { requestBrain(text, mode: .decide) }
-            else if useLocalPlanner { planWithLocalModel(text) }
-            else { error = "Connect OpenAI or a local Ollama model to plan a task." }
+        case .agent: submit(text)
         }
     }
 
@@ -321,14 +401,19 @@ final class AppModel: ObservableObject {
             requestBrain(String(text.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst(prefix.count)), mode: .search); return
         }
         if lower.hasPrefix("ask ") {
-            guard useOpenAI else { error = "Enable the OpenAI brain in Settings to ask questions."; return }
+            guard useOpenAI else { error = "Enable the \(aiProvider.title) brain in Settings to ask questions."; return }
             requestBrain(String(text.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst(4)), mode: .answer); return
         }
         do {
             let plan = try WorkflowResolver().expand(CommandParser().parse(text), workflows: workflows)
+            try automation.validateAppTargets(in: plan)
             input = ""; error = nil
-            if plan.needsConfirmation { pending = plan; openCommandCenter() }
-            else { run(plan) }
+            if assistantMode == .agent { pendingJobID = beginAgentJob(text) }
+            if plan.needsConfirmation {
+                pending = plan
+                updateJob(pendingJobID, status: .review, detail: "Review the proposed steps before running.", steps: plan.actions.map(\.summary))
+                openCommandCenter()
+            } else { run(plan) }
         } catch CommandError.unknown where useOpenAI {
             requestBrain(text, mode: .decide)
         } catch CommandError.unknown where useLocalPlanner {
@@ -343,20 +428,20 @@ final class AppModel: ObservableObject {
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { error = "Ask a question first."; return }
         guard question.count <= 16000 else { error = "Please keep a request under 16,000 characters."; return }
-        guard useOpenAI, keyConfigured else { error = "Save your OpenAI API key in Settings first."; return }
-        let name = openAIModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { error = "Choose an OpenAI model in Settings."; return }
+        guard useOpenAI, keyConfigured else { error = "Save your \(aiProvider.title) API key in Settings first."; return }
+        let name = aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { error = "Choose a \(aiProvider.title) model in Settings."; return }
         busy = true; error = nil; input = ""
-        let activity = Activity(command: question, detail: mode == .search ? "Searching the web…" : "Thinking with OpenAI…", state: .running)
+        let activity = Activity(command: question, detail: mode == .search ? "Searching the web…" : "Thinking with \(aiProvider.title)…", state: .running)
         let jobID = assistantMode == .agent ? beginAgentJob(question) : nil
         activities.insert(activity, at: 0); activities = Array(activities.prefix(60))
         execution = Task {
             do {
-                guard let key = try KeychainStore.load() else { throw Newtv1Failure("No API key in Keychain. Save it in Settings.") }
-                let brain = OpenAIBrain()
+                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("No API key in Keychain. Save it in Settings.") }
+                let brain = OpenAIBrain(provider: aiProvider)
                 var answer: String?
                 if mode == .decide {
-                    let decision = try await brain.decide(question, model: name, key: key, target: targetName, workflows: workflows)
+                    let decision = try await brain.decide(question, model: name, key: key, target: targetName, workflows: workflows, history: conversationContext())
                     try Task.checkCancellation()
                     switch decision.intent {
                     case "actions":
@@ -374,7 +459,7 @@ final class AppModel: ObservableObject {
                 } else { answer = try await brain.answer(question, model: name, key: key, search: mode == .search, allowWeb: allowWebSearch, history: conversationContext(), browserPage: browserPage) }
                 try Task.checkCancellation()
                 if let answer, !answer.isEmpty {
-                    brainAnswers.insert(BrainAnswer(question: question, markdown: answer), at: 0)
+                    brainAnswers.insert(BrainAnswer(question: question, markdown: answer, provider: aiProvider.rawValue), at: 0)
                     brainAnswers = Array(brainAnswers.prefix(30))
                     saveConversationHistory()
                     if speakAnswers { speakAnswer(answer) }
@@ -393,16 +478,16 @@ final class AppModel: ObservableObject {
     }
 
     func saveOpenAIKey(_ value: String) throws {
-        try KeychainStore.save(value)
+        try KeychainStore.save(value, provider: aiProvider)
         keyConfigured = true
-        UserDefaults.standard.set(true, forKey: "openAIKeyConfigured")
+        UserDefaults.standard.set(true, forKey: aiProvider.keyFlag)
         useOpenAI = true
     }
 
     func removeOpenAIKey() throws {
-        try KeychainStore.remove()
+        try KeychainStore.remove(provider: aiProvider)
         keyConfigured = false; useOpenAI = false
-        UserDefaults.standard.set(false, forKey: "openAIKeyConfigured")
+        UserDefaults.standard.set(false, forKey: aiProvider.keyFlag)
     }
 
     private func planWithLocalModel(_ text: String) {
@@ -440,6 +525,13 @@ final class AppModel: ObservableObject {
     }
 
     private func run(_ plan: CommandPlan) {
+        do { try automation.validateAppTargets(in: plan) }
+        catch {
+            self.error = "No steps started. " + error.localizedDescription
+            updateJob(pendingJobID, status: .failed, detail: error.localizedDescription)
+            pendingJobID = nil
+            return
+        }
         refreshPermissions()
         guard !plan.requiresAccessibility || accessibility else {
             blockedForAccessibility = plan
@@ -504,6 +596,7 @@ final class AppModel: ObservableObject {
     }
 
     func stop() {
+        cancelListening()
         camera.stop()
         guidedJobID = nil; guidedGoal = ""; guidedObservationPreview = ""
         execution?.cancel(); automation.runner.stop(); automation.hideNumbers(); pending = nil
@@ -594,7 +687,7 @@ final class AppModel: ObservableObject {
 
     func askUsingApprovedScreen() {
         guard let screen = capturedScreen, approvedScreenID == screen.id, !busy, !capturingScreen else { error = "Review this screenshot and choose Use this screen first."; return }
-        guard useOpenAI, keyConfigured else { error = "Connect OpenAI in Settings to analyze a screen. Local text extraction does not need an API key."; return }
+        guard useOpenAI, keyConfigured else { error = "Connect \(aiProvider.title) in Settings to analyze a screen. Local text extraction does not need an API key."; return }
         let question = guideQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { error = "Ask a question about the screen first."; return }
         guard question.count <= 16000 else { error = "Please keep a request under 16,000 characters."; return }
@@ -602,11 +695,11 @@ final class AppModel: ObservableObject {
         execution = Task {
             defer { busy = false; execution = nil; capturedScreen = nil }
             do {
-                guard let key = try KeychainStore.load() else { throw Newtv1Failure("Save an OpenAI key in Settings first.") }
-                let result = try await OpenAIBrain().guide(question, jpeg: screen.jpeg, model: openAIModel, key: key)
+                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save a \(aiProvider.title) key in Settings first.") }
+                let result = try await OpenAIBrain(provider: aiProvider).guide(question, jpeg: screen.jpeg, model: aiModel, key: key)
                 try Task.checkCancellation()
                 lastGuidance = result; guideDisplayID = screen.displayID; guideFrame = screen.frame
-                brainAnswers.insert(BrainAnswer(question: question, markdown: result.answer), at: 0); brainAnswers = Array(brainAnswers.prefix(30))
+                brainAnswers.insert(BrainAnswer(question: question, markdown: result.answer, provider: aiProvider.rawValue), at: 0); brainAnswers = Array(brainAnswers.prefix(30))
                 saveConversationHistory()
                 if speakAnswers { speakAnswer(result.answer) }
                 openCommandCenter(page: .companion)
@@ -618,13 +711,13 @@ final class AppModel: ObservableObject {
         guard !busy, !capturingScreen, pending == nil else { return }
         let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, prompt.count <= 8000 else { error = "Describe a diagram in 1–8,000 characters."; return }
-        guard useOpenAI, keyConfigured else { error = "Connect the OpenAI brain to generate a diagram. The example and imported diagrams work locally."; return }
+        guard useOpenAI, keyConfigured else { error = "Connect the \(aiProvider.title) brain to generate a diagram. The example and imported diagrams work locally."; return }
         busy = true; error = nil
         execution = Task {
             defer { busy = false; execution = nil }
             do {
-                guard let key = try KeychainStore.load() else { throw Newtv1Failure("Save an API key in Settings first.") }
-                let result = try await OpenAIBrain().diagram(prompt, model: openAIModel, key: key)
+                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key in Settings first.") }
+                let result = try await OpenAIBrain(provider: aiProvider).diagram(prompt, model: aiModel, key: key)
                 try Task.checkCancellation(); diagram = result
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
@@ -659,7 +752,7 @@ final class AppModel: ObservableObject {
     }
     func startGuidedAgent(_ goal: String) {
         guard !busy, !capturingScreen, pending == nil else { return }
-        guard useOpenAI, keyConfigured else { error = "Connect OpenAI before starting a guided agent."; return }
+        guard useOpenAI, keyConfigured else { error = "Connect \(aiProvider.title) before starting a guided agent."; return }
         let goal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty, goal.count <= 8000 else { error = "Describe a task in 1–8,000 characters."; return }
         guidedJobID = beginAgentJob(goal); guidedGoal = goal; guidedRequests = 0
@@ -672,7 +765,7 @@ final class AppModel: ObservableObject {
     private func requestGuidedStep() {
         guard let jobID = guidedJobID else { return }
         guard guidedRequests < 8 else { updateJob(jobID, status: .paused, detail: "The eight-observation budget is exhausted. Inspect the result and start a new task if needed."); guidedJobID = nil; return }
-        guard useOpenAI, keyConfigured else { updateJob(jobID, status: .blocked, detail: "OpenAI is not connected."); return }
+        guard useOpenAI, keyConfigured else { updateJob(jobID, status: .blocked, detail: "\(aiProvider.title) is not connected."); return }
         let observation: String
         do { observation = try automation.controlObservation(); guidedObservationPreview = observation }
         catch { self.error = error.localizedDescription; updateJob(jobID, status: .blocked, detail: error.localizedDescription); return }
@@ -683,8 +776,8 @@ final class AppModel: ObservableObject {
         execution = Task {
             defer { busy = false; execution = nil }
             do {
-                guard let key = try KeychainStore.load() else { throw Newtv1Failure("Save an API key first.") }
-                let decision = try await OpenAIBrain().decide(goal + "\nLocal execution log for this task:\n" + completed, model: openAIModel, key: key, target: targetName, workflows: [], observation: observation)
+                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key first.") }
+                let decision = try await OpenAIBrain(provider: aiProvider).decide(goal + "\nLocal execution log for this task:\n" + completed, model: aiModel, key: key, target: targetName, workflows: [], observation: observation)
                 try Task.checkCancellation()
                 guard guidedJobID == jobID else { return }
                 if decision.intent == "actions" {
@@ -740,7 +833,7 @@ final class AppModel: ObservableObject {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Newtv1", isDirectory: true).appendingPathComponent("conversations.json")
     }
     private func conversationContext() -> [ConversationTurn] {
-        brainAnswers.prefix(6).reversed().flatMap { [ConversationTurn(role: "user", content: $0.question), ConversationTurn(role: "assistant", content: $0.markdown)] }
+        brainAnswers.filter { ($0.provider ?? AIProvider.openAI.rawValue) == aiProvider.rawValue }.prefix(6).reversed().flatMap { [ConversationTurn(role: "user", content: $0.question), ConversationTurn(role: "assistant", content: $0.markdown)] }
     }
     private func loadConversationHistory() {
         guard rememberConversations, let size = try? historyURL.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 2_000_000,
