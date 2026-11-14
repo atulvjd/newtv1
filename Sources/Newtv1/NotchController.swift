@@ -22,6 +22,7 @@ final class NotchController: ObservableObject {
     private var hoverTask: Task<Void, Never>?
     private var frameTimer: Timer?
     private var motionToken = UUID()
+    private var gridMeasurement: NotchGridMeasurement?
     var showsBody: Bool { expanded || panelHeight > topHeight + 12 }
     var bodyVisibility: Double {
         let config = model.notch.normalized()
@@ -91,7 +92,15 @@ final class NotchController: ObservableObject {
             hardwareWidth = max(120, right.minX - left.maxX)
             center = (left.maxX + right.minX) / 2
         }
-        let layout = NotchGeometry.calculate(screen: screen.frame, hardwareWidth: hardwareWidth, hardwareHeight: screen.safeAreaInsets.top, hardwareCenter: center, expanded: expanded, configuration: model.notch)
+        let baseLayout = NotchGeometry.calculate(screen: screen.frame, hardwareWidth: hardwareWidth, hardwareHeight: screen.safeAreaInsets.top, hardwareCenter: center, expanded: expanded, configuration: model.notch)
+        let configuration = model.notch.normalized()
+        let measurement = gridMeasurement.flatMap { measured -> CGFloat? in
+            guard abs(measured.width - (baseLayout.frame.width - 36)) < 1,
+                  measured.sections == configuration.visibleSections,
+                  measured.rowHeight == configuration.horizontalHeight else { return nil }
+            return measured.height
+        }
+        let layout = NotchGeometry.calculate(screen: screen.frame, hardwareWidth: hardwareWidth, hardwareHeight: screen.safeAreaInsets.top, hardwareCenter: center, expanded: expanded, configuration: configuration, measuredGridHeight: measurement)
         cutoutWidth = layout.cutoutWidth; topHeight = layout.headerHeight
         frameTimer?.invalidate(); frameTimer = nil
         motionToken = UUID()
@@ -115,6 +124,18 @@ final class NotchController: ObservableObject {
             RunLoop.main.add(timer, forMode: .common)
         } else { displayFrame(layout.frame) }
         panel.orderFrontRegardless()
+    }
+
+    func updateGridMeasurement(_ measurement: NotchGridMeasurement) {
+        guard expanded, frameTimer == nil, measurement.height.isFinite, measurement.height >= 0,
+              abs(measurement.width - (panelWidth - 36)) < 1 else { return }
+        if let previous = gridMeasurement,
+           previous.sections == measurement.sections,
+           previous.rowHeight == measurement.rowHeight,
+           abs(previous.width - measurement.width) < 1,
+           abs(previous.height - measurement.height) < 1 { return }
+        gridMeasurement = measurement
+        applyFrame()
     }
 
     private func displayFrame(_ frame: CGRect) {

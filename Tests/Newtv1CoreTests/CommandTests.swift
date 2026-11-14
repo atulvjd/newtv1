@@ -360,12 +360,12 @@ final class CommandTests {
         let bar = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
         XCTAssertEqual(bar.frame.minX, screen.minX + 8)
         XCTAssertEqual(bar.frame.maxX, screen.maxX - 8)
-        XCTAssertEqual(bar.frame.height, 198 + NotchGeometry.horizontalControlsHeight)
+        XCTAssertEqual(bar.frame.height, 38 + 132 + NotchGeometry.horizontalControlsHeight)
         for rowHeight in [120.0, 260.0] {
             var sized = config
             sized.horizontalHeight = rowHeight
             let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: sized)
-            XCTAssertEqual(layout.frame.height - layout.headerHeight - NotchGeometry.horizontalControlsHeight, rowHeight)
+            XCTAssertEqual(layout.frame.height - layout.headerHeight - NotchGeometry.horizontalControlsHeight, rowHeight - 28)
         }
         let collapsed = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: false, configuration: config)
         XCTAssertEqual(collapsed.frame.width, 190 + config.wingWidth * 2)
@@ -451,6 +451,32 @@ final class CommandTests {
         XCTAssertFalse(DictationControl.shouldStop("please write stop dictation in the document"))
         XCTAssertFalse(DictationControl.shouldStop("newton stop dictation"))
         XCTAssertFalse(DictationControl.shouldStop("Newt stop dictation", custom: "Computer"))
+    }
+
+    func testNotchWrappingGrid() {
+        let sections = NotchSection.allCases.count
+        for width in [304.0, 900.0, 1460.0, 2242.0] {
+            let grid = NotchGridGeometry.calculate(width: width, sectionCount: sections, rowHeight: 132)
+            XCTAssertTrue(grid.columns >= 1)
+            XCTAssertTrue(grid.rows * grid.columns >= sections)
+            XCTAssertTrue((grid.rows - 1) * grid.columns < sections)
+            XCTAssertTrue(CGFloat(grid.columns) * grid.cardWidth + CGFloat(grid.columns - 1) * NotchGridGeometry.spacing <= width + 0.001)
+            XCTAssertEqual(grid.minimumHeight, CGFloat(grid.rows) * 132 + CGFloat(grid.rows - 1) * 12)
+        }
+        let wrapped = NotchGridGeometry.calculate(width: 2242, sectionCount: 11, rowHeight: 132)
+        XCTAssertEqual(wrapped.columns, 8)
+        XCTAssertEqual(wrapped.rows, 2)
+        let empty = NotchGridGeometry.calculate(width: 800, sectionCount: 0, rowHeight: 132)
+        XCTAssertEqual(empty.minimumHeight, 0)
+        var configuration = NotchConfiguration()
+        configuration.hiddenSections = []
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: configuration)
+        XCTAssertEqual(layout.frame.height, 38 + 132 * 4 + 12 * 3 + NotchGeometry.horizontalControlsHeight)
+        let measured = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: configuration, measuredGridHeight: 750)
+        XCTAssertEqual(measured.frame.height, 38 + 750 + NotchGeometry.horizontalControlsHeight)
+        let bounded = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: configuration, measuredGridHeight: 2000)
+        XCTAssertTrue(bounded.frame.minY >= screen.minY + 16)
     }
 
     func testInstalledAppMatching() throws {
@@ -628,6 +654,7 @@ struct CoreChecks {
             ("Gemini multimodal schema, grounding and refusal handling", suite.testGeminiProviderTranslation),
             ("acoustic speech endpoints, pauses, noise, and timeouts", suite.testAcousticSpeechEndpoint),
             ("installed app aliases, exact identities and ambiguity", suite.testInstalledAppMatching),
+            ("notch wraps all modules into rows and grows down", suite.testNotchWrappingGrid),
             ("conversation context bounds and modes", suite.testConversationContextBoundsAndModes)
         ]
         for (name, test) in cases {

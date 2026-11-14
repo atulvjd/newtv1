@@ -186,12 +186,12 @@ public struct NotchConfiguration: Codable, Equatable {
 }
 
 public struct NotchGeometry {
-    public static let horizontalControlsHeight = 54.0
+    public static let horizontalControlsHeight = 75.0
     public let frame: CGRect
     public let headerHeight: CGFloat
     public let cutoutWidth: CGFloat
 
-    public static func calculate(screen: CGRect, hardwareWidth: CGFloat, hardwareHeight: CGFloat, hardwareCenter: CGFloat? = nil, expanded: Bool, configuration: NotchConfiguration) -> Self {
+    public static func calculate(screen: CGRect, hardwareWidth: CGFloat, hardwareHeight: CGFloat, hardwareCenter: CGFloat? = nil, expanded: Bool, configuration: NotchConfiguration, measuredGridHeight: CGFloat? = nil) -> Self {
         let config = configuration.normalized()
         let attached = config.style == .attached
         let cutout = attached ? max(0, hardwareWidth) : 0
@@ -202,7 +202,9 @@ public struct NotchGeometry {
         let expandedWidth = wide && config.fullWidthExpansion ? availableWidth : max(CGFloat(config.expandedWidth), restingWidth)
         let width = min(availableWidth, expanded ? expandedWidth : restingWidth)
         let topOffset = attached ? 0 : max(0, hardwareHeight) + CGFloat(config.floatingGap)
-        let bodyHeight = wide ? config.horizontalHeight + horizontalControlsHeight : config.contentHeight
+        let grid = NotchGridGeometry.calculate(width: max(1, width - 36), sectionCount: config.visibleSections.count, rowHeight: max(80, config.horizontalHeight - 28))
+        let measured = measuredGridHeight.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
+        let bodyHeight = wide ? max(grid.minimumHeight, measured) + horizontalControlsHeight : config.contentHeight
         let height = min(max(1, screen.height - topOffset - 16), expanded ? header + CGFloat(bodyHeight) : header + 8)
         let center = attached ? (hardwareCenter ?? screen.midX) : screen.midX + CGFloat(config.horizontalOffset)
         let x = min(max(center - width / 2, screen.minX + 8), screen.maxX - width - 8)

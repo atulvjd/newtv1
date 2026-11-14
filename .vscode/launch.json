@@ -1,0 +1,84 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Debug Newtv1",
+            "target": "Newtv1",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Newtv1"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Release Newtv1",
+            "target": "Newtv1",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Newtv1"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Debug Newtv1Setup",
+            "target": "Newtv1Setup",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Newtv1Setup"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Release Newtv1Setup",
+            "target": "Newtv1Setup",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Newtv1Setup"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Debug Newtv1CoreChecks",
+            "target": "Newtv1CoreChecks",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Newtv1CoreChecks"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Release Newtv1CoreChecks",
+            "target": "Newtv1CoreChecks",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Newtv1CoreChecks"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Debug Newtv1BrowserHost",
+            "target": "Newtv1BrowserHost",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Newtv1BrowserHost"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Release Newtv1BrowserHost",
+            "target": "Newtv1BrowserHost",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Newtv1BrowserHost"
+        }
+    ]
+}

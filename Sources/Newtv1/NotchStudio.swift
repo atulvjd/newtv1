@@ -13,6 +13,7 @@ struct NotchStudio: View {
     @StudioState private var shortcutIcon = "bolt"
     @StudioState private var shortcutCommand = ""
     @StudioState private var editingID: UUID?
+    @StudioState private var previewHeight: CGFloat = 314
     private var tint: Color { model.notch.tint }
     private let card = Color.white.opacity(0.035)
 
@@ -72,22 +73,7 @@ struct NotchStudio: View {
                         .background(model.notch.style == .attached ? Color.black : .clear)
                     if horizontal {
                         VStack(spacing: 8) {
-                            GeometryReader { available in
-                                ScrollView(.horizontal) {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        ForEach(model.notch.normalized().visibleSections) { section in
-                                            ScrollView {
-                                                NotchModule(section: section, model: model, speech: model.speech).padding(10)
-                                            }
-                                            .frame(width: 220, height: max(1, available.size.height - 10))
-                                            .clipped()
-                                            .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-                                        }
-                                    }.padding(.bottom, 10)
-                                }
-                                .frame(width: available.size.width, height: available.size.height)
-                                .clipped()
-                            }
+                            NotchModulesGrid(width: max(1, width - 20), model: model, speech: model.speech)
                             Divider().overlay(tint.opacity(0.12))
                             HStack {
                                 Label("Newtv1", systemImage: "waveform").font(.system(size: 13, weight: .semibold)).foregroundStyle(tint)
@@ -107,12 +93,19 @@ struct NotchStudio: View {
                     HStack { Label("Start listening", systemImage: "mic.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).padding(8).background(tint, in: RoundedRectangle(cornerRadius: 7)); Image(systemName: "stop.circle").foregroundStyle(.orange); Image(systemName: "sparkles").foregroundStyle(tint) }.padding(14)
                     }
                 }
-                .frame(width: width, height: horizontal ? model.notch.horizontalHeight + NotchGeometry.horizontalControlsHeight + 30 : min(280, model.notch.contentHeight + 30))
+                .frame(width: width)
+                .frame(height: horizontal ? nil : min(280, model.notch.contentHeight + 30))
                 .background(NotchSurface(config: model.notch))
                 .clipShape(NotchShape(radius: model.notch.cornerRadius, floating: model.notch.style == .floating))
                 .padding(.top, model.notch.style == .floating ? 38 : 0)
             }.clipShape(RoundedRectangle(cornerRadius: 15)).overlay(RoundedRectangle(cornerRadius: 15).stroke(.white.opacity(0.07)))
-        }.frame(height: model.notch.style == .floating ? 352 : 314)
+        }
+        .frame(height: model.notch.expansionLayout == .horizontal ? previewHeight : model.notch.style == .floating ? 352 : 314)
+        .onPreferenceChange(NotchGridMeasurementKey.self) { measurement in
+            guard let measurement, model.notch.expansionLayout == .horizontal else { return }
+            let height = measurement.height + 150 + (model.notch.style == .floating ? 38 : 0)
+            if abs(previewHeight - height) > 1 { previewHeight = max(314, height) }
+        }
     }
 
     private var appearance: some View {

@@ -122,28 +122,12 @@ struct NotchView: View {
 
     private var horizontalBody: some View {
         VStack(spacing: 10) {
-            GeometryReader { available in
-                ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(config.visibleSections) { section in
-                            ScrollView(.vertical, showsIndicators: true) {
-                                NotchModule(section: section, model: model, speech: speech)
-                                    .padding(12)
-                            }
-                            .frame(width: section == .voice ? 290 : 240)
-                            .frame(height: max(1, available.size.height - 10))
-                            .contentShape(Rectangle())
-                            .clipped()
-                            .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                        }
+            NotchModulesGrid(width: max(1, controller.panelWidth - 36), model: model, speech: speech)
+                .onPreferenceChange(NotchGridMeasurementKey.self) { measurement in
+                    if let measurement {
+                        Task { @MainActor in controller.updateGridMeasurement(measurement) }
                     }
-                    .padding(.bottom, 10)
                 }
-                .frame(width: available.size.width, height: available.size.height)
-                .contentShape(Rectangle())
-                .clipped()
-            }
-            .frame(minHeight: 0, maxHeight: .infinity)
             Divider().overlay(tint.opacity(0.12))
             horizontalControls
                 .frame(height: 34)
