@@ -1,5 +1,20 @@
 let page;
 const $ = (id) => document.getElementById(id);
+async function connectionStatus() {
+  const result = await chrome.runtime.sendMessage({kind:'status'});
+  $('connection').textContent = result.connected ? 'One tab connected. Open Newtv1 → Browser.' : 'No tab connected.';
+}
+$('connect').addEventListener('click', async () => {
+  try {
+    const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
+    if (!tab || !/^https?:\/\//i.test(tab.url || '')) throw new Error('Open an HTTP or HTTPS page first.');
+    const result = await chrome.runtime.sendMessage({kind:'connect',tabId:tab.id});
+    if (!result.ok) throw new Error(result.message || 'Connection failed. Check the native-host installation.');
+    await connectionStatus();
+  } catch (error) { $('connection').textContent = error.message; }
+});
+$('disconnect').addEventListener('click', async () => { await chrome.runtime.sendMessage({kind:'disconnect'}); await connectionStatus(); });
+connectionStatus().catch(() => {});
 $('capture').addEventListener('click', async () => {
   $('send').disabled = true; page = undefined;
   try {

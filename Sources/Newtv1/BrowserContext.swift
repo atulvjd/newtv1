@@ -39,7 +39,8 @@ struct BrowserContextView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Bring your browser along.").font(.system(size: 29, weight: .semibold))
-            Text("The extension reads one page when you click it. Preview its visible text, save it locally, then approve one AI request here. Page instructions remain untrusted. Browser actions and form submission are not enabled.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(4)
+            Text("Preview a page for a question, or connect one tab for a browser task. Inspect the shared context and review each proposed action.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(4)
+            BrowserAgentView(model: model, agent: model.browserAgent)
             HStack { Button("Load browser preview") { browser.load() }; Button("Clear preview") { browser.clear() } }.buttonStyle(.bordered)
             Text(browser.message).font(.system(size: 12)).foregroundStyle(.gray)
             if let page = browser.page {

@@ -51,5 +51,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         desktop?.reveal(); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { model.stop(); model.speech.stop() }
+    func applicationWillTerminate(_ notification: Notification) { model.stop(pauseAutomaticRoutines: false); model.speech.stop() }
 }

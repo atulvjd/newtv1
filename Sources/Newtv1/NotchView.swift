@@ -30,7 +30,7 @@ struct NotchShape: Shape {
 struct NotchSurface: View {
     let config: NotchConfiguration
     var body: some View {
-        let shape = NotchShape(radius: config.cornerRadius, floating: config.style == .floating)
+        let shape = NotchShape(radius: config.cornerRadius, floating: config.style == .floating || config.expansionLayout == .island)
         ZStack {
             if config.finish == .glass { shape.fill(.ultraThinMaterial) }
             shape.fill(Color.black.opacity(config.finish == .glass ? config.opacity * 0.65 : config.opacity))
@@ -51,6 +51,14 @@ struct NotchView: View {
     private var tint: Color { config.tint }
 
     var body: some View {
+        Group {
+            if config.expansionLayout == .island {
+                DynamicIslandView(controller: controller, model: model, speech: speech, media: model.nowPlaying, speaker: speaker, browser: model.browserAgent)
+            } else { classicBody }
+        }
+    }
+
+    private var classicBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
@@ -232,16 +240,18 @@ struct NotchModule: View {
     let section: NotchSection
     @ObservedObject var model: AppModel
     @ObservedObject var speech: SpeechController
+    var showHeading = true
     private var tint: Color { model.notch.tint }
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label(section.title.uppercased(), systemImage: section.icon).font(.system(size: 8, weight: .semibold)).tracking(1.5).foregroundStyle(tint.opacity(0.7))
+            if showHeading { Label(section.title.uppercased(), systemImage: section.icon).font(.system(size: 8, weight: .semibold)).tracking(1.5).foregroundStyle(tint.opacity(0.7)) }
             content
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var content: some View {
         switch section {
+        case .tasks: NotchTaskModule(model: model)
         case .audio: AudioModule(audio: model.audio)
         case .calendar: CalendarModule(calendar: model.calendar)
         case .downloads: DownloadsModule(files: model.files)
@@ -301,6 +311,29 @@ struct NotchModule: View {
         case .notes:
             Text(model.scratchpad.isEmpty ? "A thought worth keeping?" : model.scratchpad).font(.system(size: 11)).foregroundStyle(model.scratchpad.isEmpty ? .gray : .white.opacity(0.8)).lineLimit(model.notch.compactRows ? 2 : 5)
             Button("Edit scratchpad ↗") { model.openCommandCenter(page: .notch) }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(tint)
+        }
+    }
+}
+
+struct NotchTaskModule: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            let jobs = model.agentJobs.filter { $0.archived != true }
+            if jobs.isEmpty { Text("Hand Newt a task to track it here.").font(.system(size: 11)).foregroundStyle(.gray) }
+            ForEach(Array(jobs.prefix(3))) { job in
+                Button { model.openTask(job.id) } label: {
+                    HStack(alignment: .top, spacing: 7) {
+                        Circle().fill(job.status == .failed ? Color.orange : model.notch.tint).frame(width: 5, height: 5).padding(.top, 4)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(job.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                            Text(job.status.rawValue).font(.system(size: 9)).foregroundStyle(.gray)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }.buttonStyle(.plain)
+            }
+            Button("All tasks ↗") { model.openCommandCenter(page: .jobs) }.font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(model.notch.tint)
         }
     }
 }

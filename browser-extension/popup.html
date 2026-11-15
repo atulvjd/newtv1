@@ -2,4 +2,6 @@
 <link rel="stylesheet" href="popup.css">
 <main><h1>Newtv1</h1><p>Preview this page’s visible text. Form values, password fields, hidden elements, and frames are excluded. Visible page text can still contain private information.</p>
 <button id="capture">Preview current page</button><h2 id="title"></h2><p id="url"></p><textarea id="preview" aria-label="Page text preview" readonly></textarea>
-<button id="send" disabled>Save preview to Newtv1</button><p id="status" role="status"></p><p>Saved locally. Newtv1 asks before sending this page to AI. This extension cannot click, type, or submit forms.</p></main><script src="popup.js"></script></html>
+<button id="send" disabled>Save preview to Newtv1</button><p id="status" role="status"></p>
+<hr><h2>Browser tasks</h2><p>Connect this tab to expose visible text and control labels locally. Newtv1 asks before sharing with AI and before each click or edit. Clicks can submit forms. Attaching a file requires choosing and approving it in Newtv1; the site may upload immediately. Passwords are excluded. A different website needs a new connection.</p>
+<button id="connect">Connect this tab</button> <button id="disconnect">Disconnect</button><p id="connection" role="status"></p></main><script src="popup.js"></script></html>

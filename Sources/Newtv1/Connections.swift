@@ -22,17 +22,17 @@ final class Connections: ObservableObject {
     private var task: Task<Void,Never>?
     private func saveState() { UserDefaults.standard.set(Array(connected), forKey: "connectedServices") }
     func cancel() { task?.cancel(); google.cancel(); if task == nil { busy = false } }
-    func connectGoogle() {
+    func connectGoogle(allowWrites: Bool = false) {
         guard !busy else { return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.message = "Select the Google Desktop OAuth client JSON downloaded from your own Google Cloud project. It is stored in Keychain."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) < 64000, let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String:Any], let installed = root["installed"] as? [String:Any], let id = installed["client_id"] as? String, id.hasSuffix(".apps.googleusercontent.com") else { throw Newtv1Failure("Select a Google Desktop OAuth client JSON containing installed.client_id.") }
             let client = GoogleAuthorization.Client(client_id: id, client_secret: installed["client_secret"] as? String)
-            busy = true; message = "Complete Google sign-in in your browser. Read-only Gmail, Drive, and Calendar scopes will be requested."
+            busy = true; message = allowWrites ? "Google will request Gmail compose/send, Drive file creation and Calendar event permissions in addition to read access." : "Complete Google sign-in in your browser. Read-only Gmail, Drive, and Calendar scopes will be requested."
             task = Task { [weak self] in
                 guard let self else { return }; defer { self.busy = false; self.task = nil }
-                do { let credential = try await self.google.authorize(client); try Task.checkCancellation(); try ServiceSecrets.save(JSONEncoder().encode(credential), account: "google"); self.connected.insert("google"); self.saveState(); self.message = "Google connected. Choose a source and Refresh." }
+                do { let credential = try await self.google.authorize(client, allowWrites: allowWrites); try Task.checkCancellation(); try ServiceSecrets.save(JSONEncoder().encode(credential), account: "google"); self.connected.insert("google"); self.saveState(); self.message = "Google connected. Choose a source and Refresh." }
                 catch { self.message = error is CancellationError ? "Google connection cancelled." : error.localizedDescription }
             }
         } catch { message = error.localizedDescription }
@@ -165,6 +165,25 @@ final class Connections: ObservableObject {
         }
     }
     func consume() throws -> BrowserPage { guard approved, let preview else { throw Newtv1Failure("Approve this preview for one request first.") }; approved = false; return try preview.validated() }
+    func perform(_ write: ServiceWrite) {
+        guard !busy else { return }
+        busy = true; message = "Submitting the reviewed service action…"
+        task = Task { [weak self] in
+            guard let self else { return }; defer { self.busy = false; self.task = nil }
+            do {
+                if write.kind.account == "google" {
+                    guard let data = try ServiceSecrets.load("google"), try JSONDecoder().decode(GoogleAuthorization.Credential.self, from: data).canWrite == true else { throw Newtv1Failure("Reconnect Google with write permissions enabled first.") }
+                }
+                let token = try await self.accessToken(write.kind.account)
+                try Task.checkCancellation()
+                let data = try await ServiceHTTP().data(write.request(token: token))
+                guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Newtv1Failure("Unrecognized receipt. Inspect the service before retrying.") }
+                if write.kind == .slack, result["ok"] as? Bool != true { throw Newtv1Failure("Slack rejected the action. Check chat:write and channel membership.") }
+                let receipt = (result["id"] as? String) ?? (result["ts"] as? String) ?? (result["object"] as? String) ?? "accepted"
+                self.message = write.kind.rawValue + " · provider receipt: " + String(receipt.prefix(150))
+            } catch { self.message = error.localizedDescription + " If the request reached the provider, it may have completed. Inspect before retrying; Newt will not replay it automatically." }
+        }
+    }
 }
 
 private typealias ConnectionState<T> = SwiftUI.State<T>
@@ -173,19 +192,22 @@ struct ConnectionsView: View {
     @ObservedObject var connections: Connections
     @ConnectionState private var token = ""
     @ConnectionState private var question = ""
+    @ConnectionState private var allowGoogleWrites = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Your tools, connected.").font(.system(size: 29, weight: .semibold))
-            Text("Read Gmail, Drive, Calendar, Slack, and Notion. Credentials stay in Keychain. Lists and previews stay local until you approve one AI question. This release does not send mail/messages or modify service content.").font(.system(size: 12)).foregroundStyle(.gray)
+            Text("Read Gmail, Drive, Calendar, Slack, and Notion, or review an explicit service action below. Credentials stay in Keychain. Content is sent to AI only when you approve a question.").font(.system(size: 12)).foregroundStyle(.gray)
+            if connections.source.account == "google" { Toggle("Request Google write permissions when connecting", isOn: $allowGoogleWrites).toggleStyle(.switch).font(.system(size: 12)) }
             Picker("Source", selection: $connections.source) { ForEach(Connections.Source.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).disabled(connections.busy)
             HStack {
-                if connections.source.account == "google" { Button("Connect Google…") { connections.connectGoogle() }.disabled(connections.busy) }
+                if connections.source.account == "google" { Button("Connect Google…") { connections.connectGoogle(allowWrites: allowGoogleWrites) }.disabled(connections.busy) }
                 else { SecureField(connections.source == .slack ? "Slack read-scope token" : "Notion integration token", text: $token).textFieldStyle(.roundedBorder); Button("Save credential") { connections.connectToken(token, account: connections.source.account); token = "" }.disabled(token.isEmpty || connections.busy) }
                 Button("Refresh") { connections.refresh() }.disabled(connections.busy)
                 if connections.connected.contains(connections.source.account) { Button("Disconnect") { connections.disconnect(connections.source.account) } }
                 if connections.busy { ProgressView().controlSize(.small); Button("Cancel") { connections.cancel() } }
             }.buttonStyle(.bordered)
             Text(connections.message).font(.system(size: 12)).foregroundStyle(.gray)
+            ServiceWriteView(connections: connections)
             ForEach(connections.items) { item in
                 Button { connections.read(item) } label: { HStack { VStack(alignment: .leading, spacing: 5) { Text(item.title).font(.system(size: 13, weight: .medium)); Text(item.subtitle).font(.system(size: 10)).foregroundStyle(.gray) }; Spacer(); Image(systemName: "doc.text.magnifyingglass") }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).disabled(connections.busy)
             }

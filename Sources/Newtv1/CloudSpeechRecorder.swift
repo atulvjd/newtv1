@@ -10,11 +10,13 @@ final class CloudSpeechRecorder {
     var onFailure: ((String) -> Void)?
     var onFinished: (() -> Void)?
     var transcribe: ((Data) async throws -> String)?
-    var silenceDuration: TimeInterval = 1.4
+    var onTranscribing: ((Bool) -> Void)?
+    var silenceDuration: TimeInterval = 2
     var continuousListening = false
-    private var recorder: AVAudioRecorder?
+    private let capture = SpeechAudioCapture()
+    private var recording = false
+    private var lastAudioSample = 0.0
     private var timer: Timer?
-    private var file: URL?
     private var segments: [URL] = []
     private var endpoint = SpeechEndpoint(now: ProcessInfo.processInfo.systemUptime)
     private var running = false
@@ -34,38 +36,37 @@ final class CloudSpeechRecorder {
 
     private func recordSegment() throws {
         guard running else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("newtv1-" + UUID().uuidString + ".wav")
-        file = url
-        do {
-            let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
-                AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false]
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.isMeteringEnabled = true
-            guard recorder.prepareToRecord() else { throw Newtv1Failure("The microphone recorder could not prepare.") }
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            guard recorder.record() else { throw Newtv1Failure("The microphone recorder could not start.") }
-            self.recorder = recorder
-            onStatus?("Listening · finish speaking to send")
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.tick() }
+        let token = generation
+        endpoint = SpeechEndpoint(silenceDuration: silenceDuration, now: now, usesSpeechClassification: true)
+        try capture.start(recording: true, onSample: { [weak self] power, rms, timestamp in
+            Task { @MainActor [weak self] in
+                guard let self, self.running, self.recording, self.generation == token else { return }
+                self.lastAudioSample = timestamp
+                self.onLevel?(min(1, rms * 8))
+                self.endpoint.observe(powerDB: power, now: timestamp)
             }
-        } catch {
-            stop()
-            throw error
+        }, onSpeech: { [weak self] probability, timestamp in
+            Task { @MainActor [weak self] in
+                guard let self, self.running, self.recording, self.generation == token else { return }
+                self.endpoint.observeSpeech(probability: probability, through: timestamp)
+            }
+        }, onFailure: { [weak self] message in
+            Task { @MainActor [weak self] in
+                guard let self, self.running, self.generation == token else { return }
+                self.fail(message)
+            }
+        })
+        recording = true
+        lastAudioSample = now
+        onTranscribing?(false)
+        onStatus?("Listening · pause for two seconds to send")
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.tick() }
         }
     }
 
     private func tick() {
-        guard running, let recorder else { return }
-        guard recorder.isRecording else {
-            fail("The microphone recording was interrupted. Check your input device and try again.")
-            return
-        }
-        recorder.updateMeters()
-        let power = recorder.averagePower(forChannel: 0)
-        onLevel?(min(1, pow(10, power / 20) * 4))
-        endpoint.observe(powerDB: Double(power), now: now)
+        guard running, recording else { return }
         switch endpoint.state(now: now) {
         case .idleTimeout:
             stop()
@@ -81,30 +82,26 @@ final class CloudSpeechRecorder {
         case .speaking:
             onStatus?("Hearing you…")
         case .pausing:
-            onStatus?("Waiting for you to finish…")
+            onStatus?("Waiting for your pause…")
         default:
             break
         }
-        // Keep each provider upload bounded without dispatching an incomplete command.
-        if recorder.currentTime >= 28 {
-            closeSegment()
-            do { try recordSegment() }
-            catch { fail("Microphone recording was interrupted. Try again.") }
+        if now - lastAudioSample >= 2 {
+            fail("The microphone stopped delivering audio. Check your input device and try again.")
         }
     }
 
-    private func closeSegment() {
+    private func closeRecording() {
+        recording = false
         timer?.invalidate()
         timer = nil
-        recorder?.stop()
-        recorder = nil
-        if let file { segments.append(file) }
-        file = nil
+        segments += capture.finish()
+        onLevel?(0)
     }
 
     func finish() {
-        guard running, recorder != nil else { return }
-        closeSegment()
+        guard running, recording else { return }
+        closeRecording()
         onLevel?(0)
         guard endpoint.hasSpeech else {
             stop()
@@ -115,7 +112,8 @@ final class CloudSpeechRecorder {
         guard let transcribe else { fail("Configure cloud transcription in Settings."); return }
         let token = generation
         let recordings = segments
-        onStatus?("Transcribing your complete request…")
+        onTranscribing?(true)
+        onStatus?("Microphone off · transcribing your request…")
         task = Task { [weak self] in
             guard let self else { return }
             var text = ""
@@ -161,10 +159,9 @@ final class CloudSpeechRecorder {
         task = nil
         timer?.invalidate()
         timer = nil
-        recorder?.stop()
-        recorder = nil
-        if let file { try? FileManager.default.removeItem(at: file) }
-        file = nil
+        recording = false
+        capture.discard()
+        onTranscribing?(false)
         for segment in segments { try? FileManager.default.removeItem(at: segment) }
         segments = []
         onLevel?(0)

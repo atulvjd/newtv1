@@ -52,6 +52,13 @@ struct NotchStudio: View {
     }
 
     private var preview: some View {
+        Group {
+            if model.notch.expansionLayout == .island { IslandStudioPreview(model: model).frame(height: 320) }
+            else { classicPreview }
+        }
+    }
+
+    private var classicPreview: some View {
         GeometryReader { proxy in
             let horizontal = model.notch.expansionLayout == .horizontal
             let width = horizontal && model.notch.fullWidthExpansion ? max(200, proxy.size.width - 28) : min(model.notch.expandedWidth, max(200, proxy.size.width - 42))
@@ -139,7 +146,8 @@ struct NotchStudio: View {
 
     private var layout: some View {
         group("Layout & placement", "Attached mode always keeps the camera cutout clear.") {
-            Picker("Expansion", selection: $model.notch.expansionLayout) { Text("Horizontal bar").tag(NotchExpansionLayout.horizontal); Text("Vertical panel").tag(NotchExpansionLayout.vertical) }.pickerStyle(.segmented)
+            Picker("Expansion", selection: $model.notch.expansionLayout) { Text("Dynamic Island").tag(NotchExpansionLayout.island); Text("Horizontal bar").tag(NotchExpansionLayout.horizontal); Text("Vertical panel").tag(NotchExpansionLayout.vertical) }.pickerStyle(.segmented)
+            if model.notch.expansionLayout == .island { Text("A focused 440-point island. Live activities take priority; the activities menu keeps every enabled module within reach. Hover or hold to expand, swipe up or press Escape to collapse.").font(.system(size: 12)).foregroundStyle(.gray) }
             if model.notch.expansionLayout == .horizontal {
                 Toggle("Expand across the full display width", isOn: $model.notch.fullWidthExpansion)
                 slider("Horizontal module row height", value: $model.notch.horizontalHeight, range: 120...260, format: "%.0f pt")
@@ -151,17 +159,17 @@ struct NotchStudio: View {
                 ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { _, screen in Text(screen.localizedName).tag(screenID(screen)) }
                 if !["automatic", "main"].contains(model.notch.displayID), !NSScreen.screens.contains(where: { screenID($0) == model.notch.displayID }) { Text("Saved display · disconnected").tag(model.notch.displayID) }
             }
-            if model.notch.expansionLayout == .vertical || !model.notch.fullWidthExpansion { slider("Expanded width", value: $model.notch.expandedWidth, range: 360...3200, format: "%.0f pt") }
+            if model.notch.expansionLayout == .vertical || (model.notch.expansionLayout == .horizontal && !model.notch.fullWidthExpansion) { slider("Expanded width", value: $model.notch.expandedWidth, range: 360...3200, format: "%.0f pt") }
             if model.notch.expansionLayout == .vertical { slider("Expanded content height", value: $model.notch.contentHeight, range: 220...700, format: "%.0f pt") }
             slider("Resting wing width", value: $model.notch.wingWidth, range: 32...110, format: "%.0f pt")
             if model.notch.style == .floating {
                 slider("Distance below notch", value: $model.notch.floatingGap, range: 0...120, format: "%.0f pt")
                 slider("Horizontal offset", value: $model.notch.horizontalOffset, range: -1000...1000, format: "%.0f pt")
             }
-            HStack {
+            if model.notch.expansionLayout != .island { HStack {
                 Picker("Left wing", selection: $model.notch.leftWing) { ForEach(NotchWingAction.allCases, id: \.self) { Text($0.title).tag($0) } }
                 Picker("Right wing", selection: $model.notch.rightWing) { ForEach(NotchWingAction.allCases, id: \.self) { Text($0.title).tag($0) } }
-            }
+            } }
         }
     }
 

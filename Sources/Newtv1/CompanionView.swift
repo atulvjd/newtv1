@@ -175,20 +175,25 @@ struct CompanionView: View {
 
 struct AgentJobsView: View {
     @ObservedObject var model: AppModel
+    @CompanionState private var search = ""
+    @CompanionState private var includeArchived = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack { VStack(alignment: .leading, spacing: 8) { Text("Your tasks, in view.").font(.system(size: 29, weight: .semibold)); Text("Plans, approvals, steps, and results stay visible while Newt works.").font(.system(size: 12)).foregroundStyle(.gray) }; Spacer(); Button("New task") { model.assistantMode = .agent; model.openCommandCenter(page: .companion) }.buttonStyle(.bordered) }
             if model.agentJobs.isEmpty { Text("Choose Agent in Companion, describe a Mac task, then review the plan. Tasks are serialized. Enable local memory to retain task history across launches.").font(.system(size: 13)).foregroundStyle(.gray).lineSpacing(5) }
-            ForEach(model.agentJobs) { job in
+            HStack { TextField("Search tasks…", text: $search).textFieldStyle(.roundedBorder); Toggle("Include archived", isOn: $includeArchived).toggleStyle(.switch).fixedSize() }
+            ForEach(model.agentJobs.filter { (includeArchived || $0.archived != true) && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.goal.localizedCaseInsensitiveContains(search)) }.sorted { ($0.id == model.selectedTaskID ? 0 : 1) < ($1.id == model.selectedTaskID ? 0 : 1) }) { job in
                 VStack(alignment: .leading, spacing: 13) {
                     HStack { Label(job.title, systemImage: "sparkles").font(.system(size: 17, weight: .medium)); Spacer(); Text(job.status.rawValue.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(job.status == .failed ? .orange : model.notch.tint) }
                     Text(job.goal).font(.system(size: 12)).foregroundStyle(.gray)
                     ForEach(Array(job.steps.enumerated()), id: \.offset) { index, step in HStack { Text(String(format: "%02d", index + 1)).foregroundStyle(.gray); Text(step) }.font(.system(size: 11, design: .monospaced)) }
                     Text(job.detail).font(.system(size: 12)).textSelection(.enabled)
+                    TaskConversationView(model: model, job: job)
+                    Button(job.archived == true ? "Restore task" : "Archive task") { model.archiveTask(job.id, archived: job.archived != true) }.buttonStyle(.plain).font(.system(size: 11)).disabled([.planning, .running, .review].contains(job.status))
                     if job.status == .paused { Button("Mark complete after inspection") { model.markJobComplete(job.id) }.buttonStyle(.bordered) }
                     if !job.trace.isEmpty { DisclosureGroup("Execution observations") { ForEach(Array(job.trace.enumerated()), id: \.offset) { _, line in Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) } } }
                     if [.failed, .blocked, .paused].contains(job.status), model.guidedJobID == job.id { Button("Observe and replan next step") { model.replanGuidedAgent() }.buttonStyle(.bordered).disabled(model.busy || model.pending != nil) }
-                    if [.failed, .cancelled].contains(job.status), !job.remaining.isEmpty {
+                    if [.failed, .cancelled, .paused].contains(job.status), !job.remaining.isEmpty {
                         Text("Inspect the target app before retrying: the failed action may have partly completed.").font(.system(size: 11)).foregroundStyle(.orange)
                         Button("Review remaining steps") { model.reviewRecovery(job) }.buttonStyle(.bordered).disabled(model.busy || model.pending != nil)
                     }
@@ -196,6 +201,40 @@ struct AgentJobsView: View {
                     if job.status == .running || job.status == .planning { Button("Stop task") { model.stop() }.buttonStyle(.plain).foregroundStyle(.orange) }
                 }.padding(22).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
             }
+        }
+    }
+}
+
+private struct TaskConversationView: View {
+    @ObservedObject var model: AppModel
+    let job: AgentJob
+    @CompanionState private var reply = ""
+    @CompanionState private var shareControls = false
+    @CompanionState private var name = ""
+    @CompanionState private var schedule = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack { TextField("Task name", text: $name).textFieldStyle(.roundedBorder); Button("Rename") { model.renameTask(job.id, name: name) }.buttonStyle(.bordered) }.onAppear { name = job.title }
+            if let turns = job.conversation, !turns.isEmpty {
+                DisclosureGroup("Task conversation") {
+                    ForEach(Array(turns.enumerated()), id: \.offset) { _, turn in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(turn.role == "user" ? "YOU" : "NEWT").font(.system(size: 9, weight: .semibold)).foregroundStyle(model.notch.tint)
+                            Text(turn.content).font(.system(size: 12)).textSelection(.enabled)
+                        }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            TextField("Follow up on this task…", text: $reply).textFieldStyle(.roundedBorder)
+            Toggle("Share fresh app control labels with \(model.aiProvider.title) for up to eight more observations", isOn: $shareControls).toggleStyle(.switch).font(.system(size: 11))
+            HStack {
+                Button("Send to this task") { model.followUpTask(job.id, text: reply, shareControls: shareControls); reply = ""; shareControls = false }.disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(model.voiceTaskID == job.id ? "Listening for this task…" : "Voice follow-up") { model.dictateTaskFollowUp(job.id) }.disabled(model.busy)
+                if shareControls { Button("Continue with fresh controls") { model.continueGuidedTask(job.id); shareControls = false } }
+            }.buttonStyle(.bordered).disabled((model.busy && model.guidedJobID != job.id) || model.capturingScreen || model.pending != nil)
+            if model.busy, model.guidedJobID == job.id { Text("Follow-ups are applied after the current step. Newt discards a plan generated before your update.").font(.system(size: 10)).foregroundStyle(.gray) }
+            HStack { TextField("Repeat this task, e.g. every Monday at 9 am…", text: $schedule).textFieldStyle(.roundedBorder); Button("Preview routine") { model.scheduleTask(job.id, request: schedule) }.disabled(model.busy || schedule.isEmpty || model.pending != nil) }
+            Text("Follow-ups keep this job's goal and recent conversation. Enable local memory in Settings to retain task conversations after restarting.").font(.system(size: 10)).foregroundStyle(.gray)
         }
     }
 }
@@ -208,6 +247,9 @@ struct CompanionPreferences: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 17) {
             Label("Companion & voice", systemImage: "bubble.left.and.bubble.right").font(.system(size: 17, weight: .medium))
+            Text("How Newt should answer").font(.system(size: 13, weight: .medium))
+            TextEditor(text: $model.responsePreferences).font(.system(size: 12)).frame(height: 65)
+            Text("For example: “Use simple words, answer briefly, and explain code with examples.” Saved on this Mac and sent with text questions, task planning and browser tasks. Up to 2,000 characters.").font(.system(size: 11)).foregroundStyle(.gray)
             Toggle("Keep listening for more requests", isOn: $model.continuousListening)
             Text("With this off, Newt captures one request, stops the microphone after you finish, and runs it. Dictate mode continues until you stop it. Press Start listening or Option–Space and speak directly. Continuous listening uses your wake-phrase setting.").font(.system(size: 11)).foregroundStyle(.gray)
             HStack {

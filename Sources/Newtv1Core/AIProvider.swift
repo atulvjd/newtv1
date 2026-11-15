@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AIProvider: String, CaseIterable, Identifiable {
+public enum AIProvider: String, Codable, CaseIterable, Identifiable {
     case openAI = "openai", gemini
     public var id: String { rawValue }
     public var title: String { self == .gemini ? "Gemini" : "OpenAI" }

@@ -33,7 +33,13 @@ struct AgentJob: Identifiable, Codable {
     var status: Status = .planning
     var steps: [String] = []
     var detail = "Preparing a plan…"
-    var title: String { String(goal.split(separator: " ").prefix(6).joined(separator: " ")) }
+    var conversation: [ConversationTurn]? = nil
+    var provider: String? = nil
+    var customName: String? = nil
+    var archived: Bool? = nil
+    var steering: TaskSteering? = nil
+    var lastPlan: [Action]? = nil
+    var title: String { customName ?? String(goal.split(separator: " ").prefix(6).joined(separator: " ")) }
 }
 
 enum AppPage: String, CaseIterable {
@@ -79,7 +85,7 @@ final class AppModel: ObservableObject {
     @Published var voiceID: String { didSet { UserDefaults.standard.set(voiceID, forKey: "voiceID") } }
     @Published var voiceRate: Double { didSet { UserDefaults.standard.set(voiceRate, forKey: "voiceRate") } }
     @Published var pushToTalk: Bool { didSet { UserDefaults.standard.set(pushToTalk, forKey: "pushToTalk") } }
-    @Published var rememberConversations: Bool { didSet { UserDefaults.standard.set(rememberConversations, forKey: "rememberConversations"); if rememberConversations { saveConversationHistory() } } }
+    @Published var rememberConversations: Bool { didSet { UserDefaults.standard.set(rememberConversations, forKey: "rememberConversations"); if rememberConversations { saveConversationHistory(); saveTaskHistory(); browserAgent.saveHistory() } } }
     @Published var capturedScreen: CapturedScreen?
     @Published var approvedScreenID: UUID?
     @Published var capturingScreen = false
@@ -88,7 +94,15 @@ final class AppModel: ObservableObject {
     @Published var localScreenText = ""
     @Published var lastGuidance: GuidanceResult?
     @Published var agentJobs: [AgentJob] = [] { didSet { saveTaskHistory() } }
+    @Published var routineProposal: RoutineProposal?
+    @Published var routineProposalItem: ScheduledRoutine?
+    @Published var routineMessage = ""
+    @Published var automaticRoutinesPaused = UserDefaults.standard.bool(forKey: "automaticRoutinesPaused") {
+        didSet { UserDefaults.standard.set(automaticRoutinesPaused, forKey: "automaticRoutinesPaused") }
+    }
     @Published var hotkeyAvailable = true
+    @Published var selectedTaskID: UUID?
+    @Published var voiceTaskID: UUID?
     @Published var guidedObservationPreview = ""
     @Published private(set) var guidedJobID: UUID?
     private var guidedGoal = ""
@@ -104,6 +118,11 @@ final class AppModel: ObservableObject {
     let notices = NoticeStore()
     let routines = RoutineStore()
     let browser = BrowserContext()
+    let browserAgent = BrowserAgent()
+    @Published var browserTaskInput = ""
+    @Published var responsePreferences: String = UserDefaults.standard.string(forKey: "responsePreferences") ?? "" {
+        didSet { responsePreferences = String(responsePreferences.prefix(2000)); UserDefaults.standard.set(responsePreferences, forKey: "responsePreferences") }
+    }
     let connections = Connections()
     private var utilityTicks = 0
     private let guidanceOverlay = GuidanceOverlay()
@@ -159,11 +178,17 @@ final class AppModel: ObservableObject {
     init() {
         // Keep existing routines when upgrading from the original development name.
         let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "migratedTwoSecondVoiceEndpoint") {
+            defaults.set(2.0, forKey: "speechPauseDuration")
+            defaults.set(false, forKey: "continuousListening")
+            defaults.set(false, forKey: "pushToTalk")
+            defaults.set(true, forKey: "migratedTwoSecondVoiceEndpoint")
+        }
         assistantMode = AssistantMode(rawValue: defaults.string(forKey: "assistantMode") ?? "") ?? .command
         automaticLanguage = defaults.bool(forKey: "automaticLanguage")
         continuousListening = defaults.bool(forKey: "continuousListening")
-        let savedPause = defaults.object(forKey: "speechPauseDuration") as? Double ?? 1.4
-        speechPauseDuration = savedPause.isFinite ? min(3, max(0.6, savedPause)) : 1.4
+        let savedPause = defaults.object(forKey: "speechPauseDuration") as? Double ?? 2
+        speechPauseDuration = savedPause.isFinite ? min(3, max(0.6, savedPause)) : 2
         speechLocale = defaults.string(forKey: "speechLocale") ?? "en-US"
         vocabulary = defaults.string(forKey: "vocabulary") ?? ""
         speakAnswers = defaults.bool(forKey: "speakAnswers")
@@ -171,7 +196,14 @@ final class AppModel: ObservableObject {
         voiceRate = defaults.object(forKey: "voiceRate") as? Double ?? 0.48
         pushToTalk = defaults.bool(forKey: "pushToTalk")
         rememberConversations = defaults.bool(forKey: "rememberConversations")
-        notch = defaults.data(forKey: "notchConfiguration").flatMap { try? NotchConfiguration.profile($0) } ?? NotchConfiguration()
+        var initialNotch = defaults.data(forKey: "notchConfiguration").flatMap { try? NotchConfiguration.profile($0) } ?? NotchConfiguration()
+        if !defaults.bool(forKey: "migratedFocusedIsland") {
+            initialNotch.expansionLayout = .island; initialNotch.cornerRadius = 32
+            initialNotch.pinnedOnLaunch = false
+            defaults.set(true, forKey: "migratedFocusedIsland")
+            if let data = try? JSONEncoder().encode(initialNotch) { defaults.set(data, forKey: "notchConfiguration") }
+        }
+        notch = initialNotch
         scratchpad = defaults.string(forKey: "notchScratchpad") ?? ""
         customWakePhrase = defaults.string(forKey: "customWakePhrase") ?? ""
         let provider = AIProvider(rawValue: defaults.string(forKey: "aiProvider") ?? "") ?? .openAI
@@ -210,10 +242,11 @@ final class AppModel: ObservableObject {
                 self.utilityTicks += 1
                 if self.utilityTicks % 5 == 0 { self.files.refresh(); self.calendar.refresh() }
                 for name in self.routines.tick() { self.notices.add("Routine ready: " + name, detail: "Review its steps in Routines before running."); self.onPreviewNotch?() }
+                self.runApprovedRoutineIfReady()
             }
         }
         speech.onUtterance = { [weak self] text in self?.receiveVoice(text) }
-        speech.onFailure = { [weak self] message in self?.error = message }
+        speech.onFailure = { [weak self] message in self?.error = message; self?.voiceTaskID = nil }
         hotkey.onToggle = { [weak self] in Task { @MainActor in self?.hotkeyDown() } }
         hotkey.onRelease = { [weak self] in Task { @MainActor in self?.hotkeyUp() } }
         hotkeyAvailable = hotkey.register()
@@ -258,6 +291,17 @@ final class AppModel: ObservableObject {
             routines.dismiss(routine.id)
             openCommandCenter(page: .control)
         } catch { self.error = error.localizedDescription }
+    }
+    private func runApprovedRoutineIfReady() {
+        guard !automaticRoutinesPaused, !busy, !capturingScreen, pending == nil, blockedForAccessibility == nil,
+              !speech.isListening, !speechStarting, !speaker.speaking,
+              !browserAgent.busy, browserAgent.pending == nil else { return }
+        for routine in routines.routines where routine.awaitingReview {
+            guard let plan = try? routine.automaticPlan(workflows: workflows) else { continue }
+            routines.dismiss(routine.id)
+            pendingJobID = beginAgentJob("Scheduled: " + routine.name)
+            run(plan); return
+        }
     }
 
     func cancelNotchTimer() { notchTimerEnd = nil; notchTimerFinished = false }
@@ -311,6 +355,7 @@ final class AppModel: ObservableObject {
             }
     }
     private func cancelListening() {
+        voiceTaskID = nil
         speechStartID = UUID()
         speechStartTask?.cancel()
         speechStartTask = nil
@@ -376,10 +421,21 @@ final class AppModel: ObservableObject {
             error = "Your words were captured while another request was active. Finish it, then use Correct and retry."
             return
         }
+        if let id = voiceTaskID {
+            voiceTaskID = nil; speech.stop(); followUpTask(id, text: text, shareControls: false); return
+        }
         processCompanionInput(text)
     }
 
     func processCompanionInput(_ text: String) {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasPrefix("browser ") {
+            browserTaskInput = String(text.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst(8))
+            openCommandCenter(page: .browser); return
+        }
+        if lower.hasPrefix("schedule ") || lower.hasPrefix("every ") || lower.hasPrefix("remind me ") || lower.hasPrefix("pause routine ") || lower.hasPrefix("resume routine ") || lower.hasPrefix("delete routine ") {
+            proposeRoutine(text); return
+        }
         switch assistantMode {
         case .command: submit(text)
         case .talk: requestBrain(text, mode: .decide)
@@ -387,6 +443,47 @@ final class AppModel: ObservableObject {
         case .dictate: error = "Start listening in Dictate mode to insert speech into your target app."
         case .agent: submit(text)
         }
+    }
+
+    func proposeRoutine(_ request: String) {
+        guard !busy, !capturingScreen, pending == nil else { return }
+        let request = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty, request.count <= 8000 else { error = "Describe a schedule in 1–8,000 characters."; return }
+        guard useOpenAI, keyConfigured else { error = "Connect your AI provider to create routines from a sentence."; return }
+        routineProposal = nil; routineProposalItem = nil; busy = true; routineMessage = "Preparing a schedule proposal…"
+        openCommandCenter(page: .routines)
+        execution = Task {
+            defer { busy = false; execution = nil }
+            do {
+                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key in Settings.") }
+                let proposal = try await OpenAIBrain(provider: aiProvider).routine(request, routines: routines.routines, workflows: workflows, model: aiModel, key: key)
+                try Task.checkCancellation()
+                routineProposalItem = try proposal.validated(routines: routines.routines, workflows: workflows)
+                routineProposal = proposal
+                routineMessage = proposal.explanation
+            } catch { if !Task.isCancelled { routineMessage = error.localizedDescription } }
+        }
+    }
+    func saveRoutineProposal() {
+        guard !busy, let proposal = routineProposal else { return }
+        do {
+            guard var item = try proposal.validated(routines: routines.routines, workflows: workflows) else { return }
+            switch proposal.operation {
+            case "delete": routines.routines.removeAll { $0.id == item.id }
+            case "pause", "resume":
+                guard let i = routines.routines.firstIndex(where: { $0.id == item.id }) else { return }
+                routines.routines[i].enabled = proposal.operation == "resume"
+            case "update":
+                guard let i = routines.routines.firstIndex(where: { $0.id == item.id }) else { return }
+                item.enabled = routines.routines[i].enabled; routines.routines[i] = item
+            case "create":
+                guard routines.routines.count < 50 else { throw Newtv1Failure("Keep up to 50 schedules.") }
+                routines.routines.append(item)
+            default: return
+            }
+            routineMessage = "Schedule change saved. No task was run."
+            routineProposal = nil; routineProposalItem = nil
+        } catch { routineMessage = error.localizedDescription }
     }
 
     func submit(_ command: String? = nil) {
@@ -423,7 +520,7 @@ final class AppModel: ObservableObject {
 
     enum BrainMode { case answer, search, decide }
 
-    func requestBrain(_ text: String, mode: BrainMode, browserPage: BrowserPage? = nil) {
+    func requestBrain(_ text: String, mode: BrainMode, browserPage: BrowserPage? = nil, continuing job: UUID? = nil) {
         guard !busy, !capturingScreen, pending == nil else { return }
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { error = "Ask a question first."; return }
@@ -433,7 +530,9 @@ final class AppModel: ObservableObject {
         guard !name.isEmpty else { error = "Choose a \(aiProvider.title) model in Settings."; return }
         busy = true; error = nil; input = ""
         let activity = Activity(command: question, detail: mode == .search ? "Searching the web…" : "Thinking with \(aiProvider.title)…", state: .running)
-        let jobID = assistantMode == .agent ? beginAgentJob(question) : nil
+        let jobID = job ?? (assistantMode == .agent ? beginAgentJob(question) : nil)
+        if job != nil { appendJobTurn(jobID, role: "user", content: question) }
+        let history = jobID.flatMap { id in agentJobs.first(where: { $0.id == id })?.conversation }.map { Array($0.dropLast()) } ?? conversationContext()
         activities.insert(activity, at: 0); activities = Array(activities.prefix(60))
         execution = Task {
             do {
@@ -441,24 +540,26 @@ final class AppModel: ObservableObject {
                 let brain = OpenAIBrain(provider: aiProvider)
                 var answer: String?
                 if mode == .decide {
-                    let decision = try await brain.decide(question, model: name, key: key, target: targetName, workflows: workflows, history: conversationContext())
+                    let decision = try await brain.decide(question, model: name, key: key, target: targetName, workflows: workflows, history: history, preferences: responsePreferences)
                     try Task.checkCancellation()
                     switch decision.intent {
                     case "actions":
                         pending = try decision.actionPlan(transcript: question, workflows: workflows)
                         pendingJobID = jobID
                         updateJob(jobID, status: .review, detail: "Review the proposed steps before running.", steps: pending?.actions.map(\.summary))
+                        appendJobTurn(jobID, role: "assistant", content: "Proposed plan: " + (pending?.actions.map(\.summary).joined(separator: "; ") ?? ""))
                         update(activity.id, detail: "AI plan ready for review. No actions executed.", state: .success)
                         openCommandCenter(page: .control)
                     case "search":
                         guard !decision.search_query.isEmpty else { throw Newtv1Failure("Please make the search more specific.") }
-                        answer = try await brain.answer(decision.search_query, model: name, key: key, search: true, allowWeb: allowWebSearch)
+                        answer = try await brain.answer(decision.search_query, model: name, key: key, search: true, allowWeb: allowWebSearch, history: history, preferences: responsePreferences)
                     case "answer": answer = decision.answer
                     default: throw Newtv1Failure("The brain returned an unsupported response.")
                     }
-                } else { answer = try await brain.answer(question, model: name, key: key, search: mode == .search, allowWeb: allowWebSearch, history: conversationContext(), browserPage: browserPage) }
+                } else { answer = try await brain.answer(question, model: name, key: key, search: mode == .search, allowWeb: allowWebSearch, history: history, browserPage: browserPage, preferences: responsePreferences) }
                 try Task.checkCancellation()
                 if let answer, !answer.isEmpty {
+                    appendJobTurn(jobID, role: "assistant", content: answer)
                     brainAnswers.insert(BrainAnswer(question: question, markdown: answer, provider: aiProvider.rawValue), at: 0)
                     brainAnswers = Array(brainAnswers.prefix(30))
                     saveConversationHistory()
@@ -525,6 +626,13 @@ final class AppModel: ObservableObject {
     }
 
     private func run(_ plan: CommandPlan) {
+        guard !browserAgent.busy, browserAgent.pending == nil else {
+            error = "Finish or stop the browser task before starting Mac actions. No steps started."
+            if let i = agentJobs.firstIndex(where: { $0.id == pendingJobID }) { agentJobs[i].remaining = plan.actions }
+            updateJob(pendingJobID, status: .paused, detail: error ?? "Browser task active.")
+            pendingJobID = nil
+            return
+        }
         do { try automation.validateAppTargets(in: plan) }
         catch {
             self.error = "No steps started. " + error.localizedDescription
@@ -543,7 +651,7 @@ final class AppModel: ObservableObject {
         }
         blockedForAccessibility = nil
         let jobID = pendingJobID; pendingJobID = nil; currentJobID = jobID
-        if let i = agentJobs.firstIndex(where: { $0.id == jobID }) { agentJobs[i].remaining = plan.actions; agentJobs[i].trace.append("Approved run started at " + Date().formatted()) }
+        if let i = agentJobs.firstIndex(where: { $0.id == jobID }) { agentJobs[i].remaining = plan.actions; agentJobs[i].lastPlan = plan.actions; agentJobs[i].trace.append("Approved run started at " + Date().formatted()) }
         updateJob(jobID, status: .running, detail: "Executing the approved plan.", steps: plan.actions.map(\.summary))
         if jobID != nil, plan.requiresAccessibility { automation.watchForUserInterruption { [weak self] in self?.stop() } }
         busy = true
@@ -565,7 +673,9 @@ final class AppModel: ObservableObject {
                         try await Task.sleep(nanoseconds: 180_000_000)
                         verification = try automation.verify(action)
                         if let i = agentJobs.firstIndex(where: { $0.id == jobID }) {
-                            agentJobs[i].trace.append("Step \(index + 1): \(action.summary)\nBefore: \(before)\nAfter: \(automation.localObservation())\n\(verification)")
+                            let report = "Step \(index + 1): \(action.summary)\nBefore: \(before)\nAfter: \(automation.localObservation())\n\(verification)"
+                            agentJobs[i].trace.append(String(report.prefix(2000)))
+                            agentJobs[i].trace = Array(agentJobs[i].trace.suffix(12))
                             agentJobs[i].remaining = Array(plan.actions.dropFirst(index + 1))
                         }
                     }
@@ -576,6 +686,7 @@ final class AppModel: ObservableObject {
                 }
                 update(activity.id, detail: results.joined(separator: "\n"), state: .success)
                 updateJob(jobID, status: .complete, detail: results.joined(separator: "\n"))
+                appendJobTurn(jobID, role: "assistant", content: "Execution report: " + results.joined(separator: "\n"))
                 if jobID != nil, guidedJobID != jobID { notices.add("Task finished", detail: plan.transcript) }
             } catch {
                 let cancelled = Task.isCancelled || error is CancellationError
@@ -595,7 +706,11 @@ final class AppModel: ObservableObject {
         activities[index].detail = detail; activities[index].state = state
     }
 
-    func stop() {
+    func stop(pauseAutomaticRoutines: Bool = true) {
+        if pauseAutomaticRoutines { automaticRoutinesPaused = true }
+        browserAgent.stop()
+        connections.cancel()
+        routineProposal = nil; routineProposalItem = nil
         cancelListening()
         camera.stop()
         guidedJobID = nil; guidedGoal = ""; guidedObservationPreview = ""
@@ -736,14 +851,51 @@ final class AppModel: ObservableObject {
     }
 
     private func beginAgentJob(_ goal: String) -> UUID {
-        let job = AgentJob(goal: goal)
+        var job = AgentJob(goal: goal)
+        job.provider = aiProvider.rawValue
+        job.conversation = [ConversationTurn(role: "user", content: String(goal.prefix(4000)))]
         agentJobs.insert(job, at: 0); agentJobs = Array(agentJobs.prefix(25))
         return job.id
     }
+    private func appendJobTurn(_ id: UUID?, role: String, content: String) {
+        guard let i = agentJobs.firstIndex(where: { $0.id == id }) else { return }
+        var turns = agentJobs[i].conversation ?? [ConversationTurn(role: "user", content: agentJobs[i].goal)]
+        turns.append(ConversationTurn(role: role, content: String(content.prefix(8000))))
+        agentJobs[i].conversation = Array(turns.suffix(12))
+    }
+    func followUpTask(_ id: UUID, text: String, shareControls: Bool) {
+        guard !capturingScreen, pending == nil, let job = agentJobs.first(where: { $0.id == id }) else { return }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 8000 else { error = "Use 1–8,000 characters for a follow-up."; return }
+        guard (job.provider ?? AIProvider.openAI.rawValue) == aiProvider.rawValue else { error = "Select this task's original AI provider before continuing its conversation."; return }
+        if busy {
+            guard guidedJobID == id, let index = agentJobs.firstIndex(where: { $0.id == id }) else { error = "Pause this task before sending a follow-up."; return }
+            do {
+                var steering = agentJobs[index].steering ?? TaskSteering(); try steering.append(text)
+                agentJobs[index].steering = steering
+                appendJobTurn(id, role: "user", content: text)
+                agentJobs[index].detail = "Follow-up queued. Newt will use it after the current step and discard an outdated proposal."
+            } catch { self.error = error.localizedDescription }
+            return
+        }
+        if shareControls {
+            appendJobTurn(id, role: "user", content: text)
+            guidedJobID = id; guidedGoal = job.goal; guidedRequests = 0
+            requestGuidedStep()
+        } else {
+            guidedJobID = nil
+            requestBrain("Original task: " + job.goal + "\nFollow-up: " + text, mode: .decide, continuing: id)
+        }
+    }
+    func continueGuidedTask(_ id: UUID) {
+        guard !busy, pending == nil, let job = agentJobs.first(where: { $0.id == id }) else { return }
+        guard (job.provider ?? AIProvider.openAI.rawValue) == aiProvider.rawValue else { error = "Select this task's original provider first."; return }
+        guidedJobID = id; guidedGoal = job.goal; guidedRequests = 0; requestGuidedStep()
+    }
     private func updateJob(_ id: UUID?, status: AgentJob.Status, detail: String, steps: [String]? = nil) {
         guard let id, let index = agentJobs.firstIndex(where: { $0.id == id }) else { return }
-        agentJobs[index].status = status; agentJobs[index].detail = detail
-        if let steps { agentJobs[index].steps = steps }
+        agentJobs[index].status = status; agentJobs[index].detail = String(detail.prefix(16000))
+        if let steps { agentJobs[index].steps = steps.map { String($0.prefix(2000)) } }
     }
 
     func previewAgentControls() {
@@ -764,7 +916,7 @@ final class AppModel: ObservableObject {
     }
     private func requestGuidedStep() {
         guard let jobID = guidedJobID else { return }
-        guard guidedRequests < 8 else { updateJob(jobID, status: .paused, detail: "The eight-observation budget is exhausted. Inspect the result and start a new task if needed."); guidedJobID = nil; return }
+        guard guidedRequests < 8 else { updateJob(jobID, status: .paused, detail: "Paused after eight observations. Inspect the result and use Continue with fresh controls to continue this task."); return }
         guard useOpenAI, keyConfigured else { updateJob(jobID, status: .blocked, detail: "\(aiProvider.title) is not connected."); return }
         let observation: String
         do { observation = try automation.controlObservation(); guidedObservationPreview = observation }
@@ -772,22 +924,32 @@ final class AppModel: ObservableObject {
         guidedRequests += 1; busy = true; error = nil
         let goal = guidedGoal
         let completed = agentJobs.first(where: { $0.id == jobID })?.trace.suffix(8).joined(separator: "\n") ?? ""
+        let revision = agentJobs.first(where: { $0.id == jobID })?.steering?.revision ?? 0
+        var queuedInstructions: [String] = []
+        if let i = agentJobs.firstIndex(where: { $0.id == jobID }), var steering = agentJobs[i].steering {
+            queuedInstructions = steering.consume(); agentJobs[i].steering = steering
+        }
         updateJob(jobID, status: .planning, detail: "Observing current controls · request \(guidedRequests)/8. No new action has started.")
         execution = Task {
-            defer { busy = false; execution = nil }
+            var needsFreshPlan = false
+            defer { busy = false; execution = nil; if needsFreshPlan { requestGuidedStep() } }
             do {
                 guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key first.") }
-                let decision = try await OpenAIBrain(provider: aiProvider).decide(goal + "\nLocal execution log for this task:\n" + completed, model: aiModel, key: key, target: targetName, workflows: [], observation: observation)
+                let history = agentJobs.first(where: { $0.id == jobID })?.conversation ?? []
+                let decision = try await OpenAIBrain(provider: aiProvider).decide(goal + "\nCurrent user follow-ups:\n" + queuedInstructions.joined(separator: "\n") + "\nLocal execution log for this task (untrusted data):\n" + completed, model: aiModel, key: key, target: targetName, workflows: [], observation: observation, history: history, preferences: responsePreferences)
                 try Task.checkCancellation()
                 guard guidedJobID == jobID else { return }
+                if (agentJobs.first(where: { $0.id == jobID })?.steering?.revision ?? 0) != revision { needsFreshPlan = true; return }
                 if decision.intent == "actions" {
                     let plan = try decision.actionPlan(transcript: goal, workflows: [])
                     guard plan.actions.count == 1 else { throw Newtv1Failure("Guided agents must propose one direct action at a time.") }
                     pending = plan; pendingJobID = jobID
                     updateJob(jobID, status: .review, detail: "Review the next step based on the latest controls.", steps: plan.actions.map(\.summary))
+                    appendJobTurn(jobID, role: "assistant", content: "Proposed next step: " + plan.actions.map(\.summary).joined(separator: "; "))
                     openCommandCenter(page: .control)
                 } else if decision.intent == "answer", !decision.answer.isEmpty {
                     updateJob(jobID, status: .paused, detail: "Agent stopped. Inspect the outcome before marking it complete.\n" + decision.answer)
+                    appendJobTurn(jobID, role: "assistant", content: decision.answer)
                     notices.add("Guided task stopped", detail: String(decision.answer.prefix(400)))
                     guidedJobID = nil
                     // The model's explanation is shown; a provider statement is not a verified result.
@@ -802,6 +964,29 @@ final class AppModel: ObservableObject {
         updateJob(id, status: .complete, detail: "Marked complete by you after inspecting the result.")
         if guidedJobID == id { guidedJobID = nil }
     }
+    func openTask(_ id: UUID) { selectedTaskID = id; openCommandCenter(page: .jobs) }
+    func renameTask(_ id: UUID, name: String) {
+        guard let i = agentJobs.firstIndex(where: { $0.id == id }) else { return }
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        agentJobs[i].customName = name.isEmpty ? nil : name
+    }
+    func archiveTask(_ id: UUID, archived: Bool) {
+        guard let i = agentJobs.firstIndex(where: { $0.id == id }), ![.planning, .running, .review].contains(agentJobs[i].status),
+              guidedJobID != id, currentJobID != id, pendingJobID != id else { return }
+        agentJobs[i].archived = archived
+    }
+    func dictateTaskFollowUp(_ id: UUID) {
+        guard !busy, pending == nil else { return }
+        cancelListening(); assistantMode = .agent
+        startListening(hold: false)
+        guard speechStarting || speech.isListening else { return }
+        voiceTaskID = id; armedByHotkey = true
+        speech.continuousListening = false
+    }
+    func scheduleTask(_ id: UUID, request: String) {
+        guard let job = agentJobs.first(where: { $0.id == id }), !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        proposeRoutine("Schedule this task: " + job.goal + "\nTiming/change requested by the user: " + request)
+    }
 
     func reviewRecovery(_ job: AgentJob) {
         guard !busy, !capturingScreen, pending == nil, !job.remaining.isEmpty else { return }
@@ -815,7 +1000,12 @@ final class AppModel: ObservableObject {
         guard rememberConversations else { return }
         do {
             try FileManager.default.createDirectory(at: tasksURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(Array(agentJobs.prefix(25))).write(to: tasksURL, options: .atomic)
+            var saved = Array(agentJobs.prefix(25))
+            var data = try JSONEncoder().encode(saved)
+            while data.count > 2_000_000, !saved.isEmpty {
+                saved.removeLast(); data = try JSONEncoder().encode(saved)
+            }
+            try data.write(to: tasksURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tasksURL.path)
         } catch { /* Keep the current task usable when local history cannot be written. */ }
     }
@@ -853,7 +1043,7 @@ final class AppModel: ObservableObject {
         alert.informativeText = "This removes current answers and the locally saved history. It does not delete your workflows or API key."
         alert.addButton(withTitle: "Clear history"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        brainAnswers.removeAll(); agentJobs.removeAll(); lastGuidance = nil; guidanceOverlay.hide()
+        brainAnswers.removeAll(); agentJobs.removeAll(); lastGuidance = nil; guidanceOverlay.hide(); browserAgent.clearHistory()
         if FileManager.default.fileExists(atPath: tasksURL.path) { try? FileManager.default.removeItem(at: tasksURL) }
         if FileManager.default.fileExists(atPath: historyURL.path) { do { try FileManager.default.removeItem(at: historyURL) } catch { self.error = "Could not remove saved history." } }
     }

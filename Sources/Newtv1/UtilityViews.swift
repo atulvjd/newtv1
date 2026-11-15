@@ -141,18 +141,40 @@ struct RoutinesView: View {
     @UtilityState private var repetition = ScheduledRoutine.Repetition.once
     @UtilityState private var editing: UUID?
     @UtilityState private var message = ""
+    @UtilityState private var scheduleRequest = ""
+    @UtilityState private var weekdays: Set<Int> = []
+    @UtilityState private var automaticLocal = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Routines, right on time.").font(.system(size: 29, weight: .semibold))
-            Text("Schedules are saved on this Mac. Newtv1 must be open; missed runs become one review when it returns. Every run requires review before any action starts.").font(.system(size: 12)).foregroundStyle(.gray)
+            Text("Schedules are saved on this Mac. Newtv1 must be open; missed runs coalesce into one occurrence. Runs wait for review unless you explicitly approve supported local actions below.").font(.system(size: 12)).foregroundStyle(.gray)
+            Toggle("Pause automatic local routines", isOn: $model.automaticRoutinesPaused).toggleStyle(.switch)
+            if model.automaticRoutinesPaused { Text("Automatic runs are paused. Stop All Actions also turns this on.").font(.system(size: 11)).foregroundStyle(.orange) }
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Schedule it in your own words").font(.system(size: 17, weight: .medium))
+                TextField("Every Tuesday and Thursday at 5 pm, run focus mode…", text: $scheduleRequest).textFieldStyle(.roundedBorder).onSubmit { model.proposeRoutine(scheduleRequest) }
+                Button("Preview schedule change") { model.proposeRoutine(scheduleRequest) }.buttonStyle(.bordered).disabled(model.busy || scheduleRequest.isEmpty)
+                if !model.routineMessage.isEmpty { Text(model.routineMessage).font(.system(size: 12)).textSelection(.enabled) }
+                if let proposal = model.routineProposal, proposal.operation != "question", let item = model.routineProposalItem {
+                    Text(proposal.operation.capitalized + ": " + item.name).font(.system(size: 15, weight: .medium))
+                    if ["create", "update"].contains(proposal.operation) {
+                        Text(item.nextRun.formatted(date: .complete, time: .shortened) + " · " + TimeZone.current.identifier + " · " + item.repetition.rawValue).font(.system(size: 12)).foregroundStyle(model.notch.tint)
+                        if let days = item.weekdays, !days.isEmpty { Text(days.map { Calendar.current.weekdaySymbols[$0 - 1] }.joined(separator: ", ")).font(.system(size: 12)) }
+                        Text(item.commands).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                    }
+                    HStack { Button("Save this change") { model.saveRoutineProposal() }.buttonStyle(.borderedProminent).foregroundStyle(.black); Button("Discard") { model.routineProposal = nil; model.routineProposalItem = nil; model.routineMessage = "Discarded. No schedule changed." }.buttonStyle(.bordered) }
+                }
+            }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
             ForEach(store.routines) { item in
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack { Text(item.name).font(.system(size: 16, weight: .medium)); Spacer(); Toggle("Enabled", isOn: Binding(get: { store.routines.first(where: { $0.id == item.id })?.enabled ?? false }, set: { value in if let i = store.routines.firstIndex(where: { $0.id == item.id }) { store.routines[i].enabled = value } })).fixedSize() }
+                    HStack { Text(item.name).font(.system(size: 16, weight: .medium)); Spacer(); Toggle("Enabled", isOn: Binding(get: { store.routines.first(where: { $0.id == item.id })?.enabled ?? false }, set: { value in if let i = store.routines.firstIndex(where: { $0.id == item.id }) { store.routines[i].enabled = value; if !value { store.routines[i].awaitingReview = false } } })).fixedSize() }
                     Text(item.awaitingReview ? "Ready for review" : item.nextRun.formatted() + " · " + item.repetition.rawValue).font(.system(size: 11)).foregroundStyle(model.notch.tint)
+                    if let days = item.weekdays, !days.isEmpty { Text(days.map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: ", ")).font(.system(size: 11)).foregroundStyle(.gray) }
                     Text(item.commands).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+                    if item.executionPolicy == .approvedLocal { Text("Approved local actions · changed commands return to review").font(.system(size: 10)).foregroundStyle(model.notch.tint) }
                     HStack {
                         if item.awaitingReview { Button("Review run") { model.reviewRoutine(item) }; Button("Skip occurrence") { store.dismiss(item.id) } }
-                        Button("Edit") { editing = item.id; name = item.name; commands = item.commands; date = item.nextRun; repetition = item.repetition }
+                        Button("Edit") { editing = item.id; name = item.name; commands = item.commands; date = item.nextRun; repetition = item.repetition; weekdays = Set(item.weekdays ?? []); automaticLocal = item.executionPolicy == .approvedLocal }
                         Button("Delete schedule") { store.routines.removeAll { $0.id == item.id } }
                     }.buttonStyle(.bordered)
                 }.padding(18).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
@@ -164,6 +186,12 @@ struct RoutinesView: View {
                 Text("One supported command per line. You can use run WORKFLOW NAME.").font(.system(size: 10)).foregroundStyle(.gray)
                 DatePicker("First run", selection: $date)
                 Picker("Repeat", selection: $repetition) { ForEach(ScheduledRoutine.Repetition.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
+                Toggle("Approve these local actions for automatic scheduled runs", isOn: $automaticLocal).toggleStyle(.switch)
+                Text("Supports app launches, window placement, volume/mute and waits. Typing, clicks, shortcuts, web navigation, shell and account changes require review. Re-saving this switch approves the exact expanded commands shown here; changing a workflow returns the run to review.").font(.system(size: 10)).foregroundStyle(.gray)
+                if repetition == .weekly {
+                    HStack { ForEach(1...7, id: \.self) { day in Toggle(Calendar.current.shortWeekdaySymbols[day - 1], isOn: Binding(get: { weekdays.contains(day) }, set: { if $0 { weekdays.insert(day) } else { weekdays.remove(day) } })).toggleStyle(.button) } }
+                    Text("Leave days empty to repeat on the first run's weekday.").font(.system(size: 10)).foregroundStyle(.gray)
+                }
                 HStack {
                     Button("Save routine") { save() }.buttonStyle(.borderedProminent).foregroundStyle(.black)
                     if editing != nil { Button("Cancel edit") { editing = nil; name = ""; commands = "" } }
@@ -175,12 +203,16 @@ struct RoutinesView: View {
     }
     private func save() {
         do {
-            var item = ScheduledRoutine(id: editing ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), commands: commands, nextRun: date, repetition: repetition)
-            _ = try item.plan(workflows: model.workflows)
+            var item = ScheduledRoutine(id: editing ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), commands: commands, nextRun: date, repetition: repetition, weekdays: repetition == .weekly ? Array(weekdays).sorted() : nil)
+            let plan = try item.plan(workflows: model.workflows)
+            if automaticLocal {
+                guard RoutineExecutionPolicy.supportsAutomatic(plan.actions) else { throw Newtv1Failure("These commands include actions that need review. Turn off automatic runs or use only app launches, windows, volume/mute and waits.") }
+                item.executionPolicy = .approvedLocal; item.approvedActions = plan.actions
+            }
             guard date > Date() else { throw Newtv1Failure("Choose a future time.") }
             guard editing != nil || store.routines.count < 50 else { throw Newtv1Failure("Keep up to 50 schedules.") }
             if let i = store.routines.firstIndex(where: { $0.id == item.id }) { item.enabled = store.routines[i].enabled; store.routines[i] = item } else { store.routines.append(item) }
-            editing = nil; name = ""; commands = ""; message = "Routine saved."
+            editing = nil; name = ""; commands = ""; automaticLocal = false; message = "Routine saved."
         } catch { message = error.localizedDescription }
     }
 }

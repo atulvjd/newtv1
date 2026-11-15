@@ -1,7 +1,7 @@
 import Foundation
 
 /// Acoustic endpoint detection shared by local recognition and cloud recording.
-/// Times are monotonic seconds. A transcript update alone never ends an utterance.
+/// Times are monotonic seconds. Transcription latency must not extend acoustic silence.
 public struct SpeechEndpoint {
     public enum State: Equatable { case waiting, speaking, pausing, finished, idleTimeout, durationLimit }
     public let silenceDuration: TimeInterval
@@ -11,12 +11,15 @@ public struct SpeechEndpoint {
     private var voicedDuration: TimeInterval = 0
     private var candidateDuration: TimeInterval = 0
     private var lastVoice: TimeInterval?
-    private var lastTextChange: TimeInterval?
+    private var lastClassification: TimeInterval?
+    private var classifiedVoice = false
+    private let usesSpeechClassification: Bool
     private var voiceActive = false
     public private(set) var hasSpeech = false
 
-    public init(silenceDuration: TimeInterval = 1.4, now: TimeInterval) {
-        self.silenceDuration = silenceDuration.isFinite ? min(3, max(0.6, silenceDuration)) : 1.4
+    public init(silenceDuration: TimeInterval = 2, now: TimeInterval, usesSpeechClassification: Bool = false) {
+        self.silenceDuration = silenceDuration.isFinite ? min(3, max(0.6, silenceDuration)) : 2
+        self.usesSpeechClassification = usesSpeechClassification
         startedAt = now
         previousSample = now
     }
@@ -32,8 +35,10 @@ public struct SpeechEndpoint {
             voicedDuration += elapsed
             if candidateDuration >= 0.12 {
                 voiceActive = true
-                hasSpeech = true
-                lastVoice = now
+                if !usesSpeechClassification {
+                    hasSpeech = true
+                    lastVoice = now
+                }
             }
         } else {
             candidateDuration = 0
@@ -44,19 +49,34 @@ public struct SpeechEndpoint {
         }
     }
 
+    /// `through` is the end of the classified audio window, not the callback's arrival time.
+    /// Background fans, clicks and music must not continually reset the voice deadline.
+    public mutating func observeSpeech(probability: Double, through: TimeInterval) {
+        guard usesSpeechClassification, probability.isFinite, through.isFinite,
+              through >= startedAt, through >= (lastClassification ?? startedAt) else { return }
+        lastClassification = through
+        classifiedVoice = probability >= (classifiedVoice ? 0.25 : 0.4)
+        if classifiedVoice {
+            hasSpeech = true
+            lastVoice = max(lastVoice ?? through, through)
+        }
+    }
+
     public mutating func transcriptChanged(now: TimeInterval) {
-        lastTextChange = now
+        guard now.isFinite, now >= startedAt else { return }
         hasSpeech = true
-        lastVoice = max(lastVoice ?? now, now)
+        // A late partial, punctuation correction or final result isn't new microphone audio.
+        if lastVoice == nil { lastVoice = min(now, previousSample) }
     }
 
     public func state(now: TimeInterval) -> State {
         if now - startedAt >= 180 { return .durationLimit }
         guard hasSpeech else { return now - startedAt >= 12 ? .idleTimeout : .waiting }
-        if voiceActive { return .speaking }
+        if usesSpeechClassification {
+            if classifiedVoice, now - (lastClassification ?? startedAt) < 0.6 { return .speaking }
+        } else if voiceActive, now - previousSample < 0.3 { return .speaking }
         let quiet = now - (lastVoice ?? startedAt)
-        let stableText = lastTextChange.map { now - $0 >= 0.35 } ?? true
-        if quiet >= silenceDuration, stableText, voicedDuration >= 0.12 || lastTextChange != nil { return .finished }
+        if quiet >= silenceDuration { return .finished }
         return .pausing
     }
 }

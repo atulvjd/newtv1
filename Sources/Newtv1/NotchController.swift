@@ -11,6 +11,14 @@ final class NotchController: ObservableObject {
     @Published private(set) var panelWidth: CGFloat = 284
     @Published private(set) var panelHeight: CGFloat = 40
     @Published var pinned = false
+    @Published var selectedSection: NotchSection?
+    var islandActivities: [NotchSection] {
+        IslandActivities.active(listening: model.speech.isListening || model.speechStarting || model.speaker.speaking,
+            working: model.busy || model.browserAgent.busy, attention: model.error != nil,
+            playing: model.nowPlaying.track?.playing == true, timer: model.notchTimerEnd != nil || model.notchTimerFinished,
+            visible: model.notch.normalized().visibleSections)
+    }
+    var islandSection: NotchSection { selectedSection ?? islandActivities[0] }
     let model: AppModel
     private var panel: NotchPanel?
     private var dashboard: NSWindow?
@@ -23,6 +31,11 @@ final class NotchController: ObservableObject {
     private var frameTimer: Timer?
     private var motionToken = UUID()
     private var gridMeasurement: NotchGridMeasurement?
+    private var pendingMeasurement: NotchGridMeasurement?
+    private var outsideMonitor: Any?
+    private var localMonitor: Any?
+    private var menuObservers: [NSObjectProtocol] = []
+    private var menuTracking = false
     var showsBody: Bool { expanded || panelHeight > topHeight + 12 }
     var bodyVisibility: Double {
         let config = model.notch.normalized()
@@ -51,6 +64,28 @@ final class NotchController: ObservableObject {
         expanded = pinned
         model.onPreviewNotch = { [weak self] in self?.reveal() }
         reposition()
+        menuObservers.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.menuTracking = true; self?.collapseTask?.cancel() }
+        })
+        menuObservers.append(NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }; self.menuTracking = false
+                if !self.hovered { self.scheduleCollapse(after: self.model.notch.collapseDelay) }
+            }
+        })
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            Task { @MainActor [weak self] in
+                guard let self, self.model.notch.expansionLayout == .island, self.expanded else { return }
+                if event.type == .keyDown { if event.keyCode == 53 { self.dismissIsland() } }
+                else if !self.pinned { self.setExpanded(false) }
+            }
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self, self.model.notch.expansionLayout == .island, self.expanded else { return event }
+            if event.type == .keyDown, event.keyCode == 53 { self.dismissIsland(); return nil }
+            if event.type != .keyDown, event.windowNumber == self.dashboard?.windowNumber, !self.pinned { self.setExpanded(false) }
+            return event
+        }
         model.$notch.dropFirst().sink { [weak self] _ in
             // Published values arrive before assignment; apply on the next main turn.
             Task { @MainActor [weak self] in self?.reposition() }
@@ -96,7 +131,7 @@ final class NotchController: ObservableObject {
         let configuration = model.notch.normalized()
         let measurement = gridMeasurement.flatMap { measured -> CGFloat? in
             guard abs(measured.width - (baseLayout.frame.width - 36)) < 1,
-                  measured.sections == configuration.visibleSections,
+                  measured.sections == (configuration.expansionLayout == .island ? [islandSection] : configuration.visibleSections),
                   measured.rowHeight == configuration.horizontalHeight else { return nil }
             return measured.height
         }
@@ -105,7 +140,7 @@ final class NotchController: ObservableObject {
         frameTimer?.invalidate(); frameTimer = nil
         motionToken = UUID()
         let token = motionToken
-        let shouldAnimate = animated && model.notch.animations && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && panel.frame.width > 0
+        let shouldAnimate = animated && model.notch.animations && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && panel.frame.width > 0 && panel.frame != layout.frame
         if shouldAnimate {
             let from = panel.frame
             let target = layout.frame
@@ -117,7 +152,10 @@ final class NotchController: ObservableObject {
                     guard let self, self.motionToken == token else { timer.invalidate(); return }
                     let progress = min((ProcessInfo.processInfo.systemUptime - started) / duration, 1)
                     self.displayFrame(NotchMotion.frame(from: from, to: target, progress: progress, opening: opening))
-                    if progress >= 1 { timer.invalidate(); self.frameTimer = nil }
+                    if progress >= 1 {
+                        timer.invalidate(); self.frameTimer = nil
+                        if let pending = self.pendingMeasurement { self.pendingMeasurement = nil; self.updateGridMeasurement(pending) }
+                    }
                 }
             }
             frameTimer = timer
@@ -127,15 +165,16 @@ final class NotchController: ObservableObject {
     }
 
     func updateGridMeasurement(_ measurement: NotchGridMeasurement) {
-        guard expanded, frameTimer == nil, measurement.height.isFinite, measurement.height >= 0,
+        guard expanded, measurement.height.isFinite, measurement.height >= 0,
               abs(measurement.width - (panelWidth - 36)) < 1 else { return }
+        if frameTimer != nil { pendingMeasurement = measurement; return }
         if let previous = gridMeasurement,
            previous.sections == measurement.sections,
            previous.rowHeight == measurement.rowHeight,
            abs(previous.width - measurement.width) < 1,
            abs(previous.height - measurement.height) < 1 { return }
         gridMeasurement = measurement
-        applyFrame()
+        applyFrame(animated: model.notch.expansionLayout == .island)
     }
 
     private func displayFrame(_ frame: CGRect) {
@@ -151,8 +190,15 @@ final class NotchController: ObservableObject {
         collapseTask?.cancel(); hoverTask?.cancel()
         let changed = expanded != value
         expanded = value
+        if !value { selectedSection = nil; gridMeasurement = nil; pendingMeasurement = nil }
         applyFrame(animated: changed)
     }
+    func focus(_ section: NotchSection) {
+        selectedSection = section; gridMeasurement = nil
+        setExpanded(true)
+    }
+    func dismissIsland() { pinned = false; setExpanded(false) }
+    func islandContentChanged() { if expanded, frameTimer == nil { applyFrame() } }
 
     func hover(_ value: Bool) {
         hovered = value; hoverTask?.cancel()
@@ -171,7 +217,7 @@ final class NotchController: ObservableObject {
         collapseTask?.cancel()
         collapseTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch { return }
-            guard let self, !self.hovered, !self.pinned else { return }
+            guard let self, !self.hovered, !self.pinned, !self.menuTracking else { return }
             self.setExpanded(false)
         }
     }

@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Newtv1 local browser test</title>
+<style>body{font:18px system-ui;max-width:680px;margin:80px auto;background:#111;color:#eee}input,button{font:inherit;padding:10px;margin:8px}button{background:#c9f76e;border:0;border-radius:8px}output{display:block;margin:24px 0;color:#c9f76e}</style>
+<h1>Newtv1 local browser test</h1><p>This demo has no external requests. Use Name and Apply to test a browser task.</p>
+<label>Name <input id="name" aria-label="Name"></label><button id="apply">Apply</button><output id="result" aria-live="polite">Waiting for a name.</output>
+<label>Test attachment <input type="file" id="attachment" aria-label="Test attachment"></label><p id="file-result">No attachment selected.</p>
+<script>
+document.getElementById('apply').onclick=()=>{document.getElementById('result').textContent='Hello, '+document.getElementById('name').value+'.';};
+document.getElementById('attachment').onchange=e=>{document.getElementById('file-result').textContent=e.target.files.length?'Attached: '+e.target.files[0].name+' ('+e.target.files[0].size+' bytes)':'No attachment selected.';};
+</script></html>

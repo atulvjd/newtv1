@@ -54,13 +54,13 @@ final class ServiceHTTP: NSObject, URLSessionTaskDelegate {
 @MainActor
 final class GoogleAuthorization {
     struct Client: Codable { let client_id: String; let client_secret: String? }
-    struct Credential: Codable { let client: Client; var accessToken: String; var refreshToken: String; var expiresAt: Date }
+    struct Credential: Codable { let client: Client; var accessToken: String; var refreshToken: String; var expiresAt: Date; var canWrite: Bool? = nil }
     private var listener: NWListener?
     private var waiting: CheckedContinuation<String, Error>?
     private var expectedState = ""
     private var timeout: Task<Void,Never>?
     func cancel() { listener?.cancel(); listener = nil; timeout?.cancel(); timeout = nil; waiting?.resume(throwing: CancellationError()); waiting = nil }
-    func authorize(_ client: Client) async throws -> Credential {
+    func authorize(_ client: Client, allowWrites: Bool = false) async throws -> Credential {
         let verifier = try OAuthFlow.randomToken(); expectedState = try OAuthFlow.randomToken()
         let parameters = NWParameters.tcp; parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any); self.listener = listener
@@ -108,7 +108,8 @@ final class GoogleAuthorization {
         }
         guard port > 0 else { throw Newtv1Failure("Could not create a loopback authorization receiver.") }
         let redirect = "http://127.0.0.1:\(port)/oauth"
-        let scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/calendar.readonly"]
+        var scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/calendar.readonly"]
+        if allowWrites { scopes += ["https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/calendar.events"] }
         var url = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         url.queryItems = ["client_id": client.client_id, "redirect_uri": redirect, "response_type": "code", "scope": scopes.joined(separator: " "), "code_challenge": OAuthFlow.challenge(verifier), "code_challenge_method": "S256", "state": expectedState, "access_type": "offline", "prompt": "consent"].map { URLQueryItem(name: $0.key, value: $0.value) }
         let code: String = try await withTaskCancellationHandler(operation: {
@@ -122,7 +123,7 @@ final class GoogleAuthorization {
         if let secret = client.client_secret { fields["client_secret"] = secret }
         let result = try await token(fields)
         guard let access = result["access_token"] as? String, let refresh = result["refresh_token"] as? String else { throw Newtv1Failure("Google returned no offline credential. Remove the old grant and reconnect with consent.") }
-        return Credential(client: client, accessToken: access, refreshToken: refresh, expiresAt: Date().addingTimeInterval((result["expires_in"] as? Double ?? 3600) - 60))
+        return Credential(client: client, accessToken: access, refreshToken: refresh, expiresAt: Date().addingTimeInterval((result["expires_in"] as? Double ?? 3600) - 60), canWrite: allowWrites)
     }
     nonisolated private static func receiveLine(_ connection: NWConnection, accumulated: Data = Data(), completion: @escaping (String) -> Void) {
         guard accumulated.count < 16384 else { connection.cancel(); return }

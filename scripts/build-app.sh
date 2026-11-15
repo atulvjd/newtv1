@@ -9,6 +9,12 @@ fi
 swift build -c "$configuration" --scratch-path .build
 binary_dir="$(swift build -c "$configuration" --scratch-path .build --show-bin-path)"
 "$binary_dir/Newtv1CoreChecks"
+if command -v node >/dev/null 2>&1; then
+    node --check browser-extension/background.js
+    node --check browser-extension/driver.js
+    node --check browser-extension/popup.js
+    node Tests/BrowserDriver/driver.test.cjs
+fi
 app="dist/Newtv1.app"
 sign_identity="${NEWTV1_SIGN_IDENTITY:-}"
 if [[ -z "$sign_identity" ]]; then

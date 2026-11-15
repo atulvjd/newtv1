@@ -3,14 +3,15 @@ import CoreGraphics
 
 public enum NotchStyle: String, Codable, CaseIterable { case attached, floating }
 public enum NotchFinish: String, Codable, CaseIterable { case black, gradient, glass }
-public enum NotchExpansionLayout: String, Codable, CaseIterable { case horizontal, vertical }
+public enum NotchExpansionLayout: String, Codable, CaseIterable { case island, horizontal, vertical }
 public enum NotchSection: String, Codable, CaseIterable, Identifiable {
-    case voice, media, shortcuts, workflows, activity, clock, timer, notes, calendar, downloads, shelf, system, camera, clipboard, inbox, routines, audio
+    case voice, media, shortcuts, workflows, activity, clock, timer, notes, calendar, downloads, shelf, system, camera, clipboard, inbox, routines, audio, tasks
     public var id: String { rawValue }
     public var title: String { self == .media ? "Now Playing" : rawValue.capitalized }
     public var icon: String {
         switch self {
         case .voice: return "waveform"
+        case .tasks: return "checklist"
         case .media: return "music.note"
         case .calendar: return "calendar"
         case .downloads: return "arrow.down.circle"
@@ -70,14 +71,14 @@ public struct NotchConfiguration: Codable, Equatable {
     public var schemaVersion = 1
     public var style: NotchStyle = .attached
     public var finish: NotchFinish = .black
-    public var expansionLayout: NotchExpansionLayout = .horizontal
+    public var expansionLayout: NotchExpansionLayout = .island
     public var fullWidthExpansion = true
     public var horizontalHeight = 160.0
     public var accentHex = "C9F76E"
     public var expandedWidth = 460.0
     public var contentHeight = 340.0
     public var wingWidth = 52.0
-    public var cornerRadius = 22.0
+    public var cornerRadius = 32.0
     public var opacity = 1.0
     public var borderOpacity = 0.14
     public var floatingGap = 12.0
@@ -199,12 +200,13 @@ public struct NotchGeometry {
         let restingWidth = attached ? cutout + CGFloat(config.wingWidth) * 2 : max(220, CGFloat(config.wingWidth) * 2 + 116)
         let availableWidth = max(1, screen.width - 16)
         let wide = config.expansionLayout == .horizontal
-        let expandedWidth = wide && config.fullWidthExpansion ? availableWidth : max(CGFloat(config.expandedWidth), restingWidth)
+        let island = config.expansionLayout == .island
+        let expandedWidth = island ? max(restingWidth, 440) : wide && config.fullWidthExpansion ? availableWidth : max(CGFloat(config.expandedWidth), restingWidth)
         let width = min(availableWidth, expanded ? expandedWidth : restingWidth)
         let topOffset = attached ? 0 : max(0, hardwareHeight) + CGFloat(config.floatingGap)
         let grid = NotchGridGeometry.calculate(width: max(1, width - 36), sectionCount: config.visibleSections.count, rowHeight: max(80, config.horizontalHeight - 28))
         let measured = measuredGridHeight.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
-        let bodyHeight = wide ? max(grid.minimumHeight, measured) + horizontalControlsHeight : config.contentHeight
+        let bodyHeight = island ? max(100, measured) + 129 : wide ? max(grid.minimumHeight, measured) + horizontalControlsHeight : config.contentHeight
         let height = min(max(1, screen.height - topOffset - 16), expanded ? header + CGFloat(bodyHeight) : header + 8)
         let center = attached ? (hardwareCenter ?? screen.midX) : screen.midX + CGFloat(config.horizontalOffset)
         let x = min(max(center - width / 2, screen.minX + 8), screen.maxX - width - 8)

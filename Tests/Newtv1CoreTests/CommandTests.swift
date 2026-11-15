@@ -357,15 +357,16 @@ final class CommandTests {
     func testHorizontalNotchAndLegacyProfiles() throws {
         let screen = CGRect(x: -1512, y: 200, width: 1512, height: 982)
         var config = NotchConfiguration()
+        config.expansionLayout = .horizontal
         let bar = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
         XCTAssertEqual(bar.frame.minX, screen.minX + 8)
         XCTAssertEqual(bar.frame.maxX, screen.maxX - 8)
-        XCTAssertEqual(bar.frame.height, 38 + 132 + NotchGeometry.horizontalControlsHeight)
+        XCTAssertEqual(bar.frame.height, 38 + 132 * 2 + 12 + NotchGeometry.horizontalControlsHeight)
         for rowHeight in [120.0, 260.0] {
             var sized = config
             sized.horizontalHeight = rowHeight
             let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: sized)
-            XCTAssertEqual(layout.frame.height - layout.headerHeight - NotchGeometry.horizontalControlsHeight, rowHeight - 28)
+            XCTAssertEqual(layout.frame.height - layout.headerHeight - NotchGeometry.horizontalControlsHeight, 2 * (rowHeight - 28) + 12)
         }
         let collapsed = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: false, configuration: config)
         XCTAssertEqual(collapsed.frame.width, 190 + config.wingWidth * 2)
@@ -469,6 +470,7 @@ final class CommandTests {
         let empty = NotchGridGeometry.calculate(width: 800, sectionCount: 0, rowHeight: 132)
         XCTAssertEqual(empty.minimumHeight, 0)
         var configuration = NotchConfiguration()
+        configuration.expansionLayout = .horizontal
         configuration.hiddenSections = []
         let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: configuration)
@@ -604,6 +606,184 @@ final class CommandTests {
         XCTAssertEqual(try JSONDecoder().decode(ConversationTurn.self, from: JSONEncoder().encode(turn)), turn)
         XCTAssertEqual(Set(AssistantMode.allCases.map(\.rawValue)), Set(["command", "talk", "guide", "dictate", "agent"]))
     }
+
+    func testBrowserDriverContracts() throws {
+        let now = Date()
+        let snapshot = BrowserSnapshot(session: UUID(), document: UUID(), revision: 3,
+            page: BrowserPage(title: "Test", url: "https://example.com", text: "Untrusted page", capturedAt: now),
+            controls: [BrowserControl(id: 1, role: "button", label: "Save", editable: false), BrowserControl(id: 2, role: "input", label: "Name", editable: true), BrowserControl(id: 3, role: "select", label: "Color", editable: false, options: ["Red", "Blue"])])
+        _ = try snapshot.validated()
+        for action in [BrowserAction(kind: .click, target: 1), BrowserAction(kind: .type, target: 2, value: "नमस्ते"), BrowserAction(kind: .select, target: 3, value: "Blue"), BrowserAction(kind: .scroll, value: "down"), BrowserAction(kind: .observe)] {
+            let command = try BrowserCommand(snapshot: snapshot, action: action, now: now)
+            XCTAssertEqual(try command.validated(for: snapshot, now: now).action, action)
+            XCTAssertEqual(try BrowserBridge.decoder.decode(BrowserCommand.self, from: BrowserBridge.encoder.encode(command)), command)
+            XCTAssertThrowsError(try command.validated(for: snapshot, now: now.addingTimeInterval(21)))
+            let changed = BrowserSnapshot(session: snapshot.session, document: snapshot.document, revision: 4, page: snapshot.page, controls: snapshot.controls)
+            XCTAssertThrowsError(try command.validated(for: changed, now: now))
+            let otherSession = BrowserSnapshot(session: UUID(), document: snapshot.document, revision: 3, page: snapshot.page, controls: snapshot.controls)
+            XCTAssertThrowsError(try command.validated(for: otherSession, now: now))
+            let otherDocument = BrowserSnapshot(session: snapshot.session, document: UUID(), revision: 3, page: snapshot.page, controls: snapshot.controls)
+            XCTAssertThrowsError(try command.validated(for: otherDocument, now: now))
+        }
+        for action in [BrowserAction(kind: .click, target: 99), BrowserAction(kind: .type, target: 1, value: "oops"), BrowserAction(kind: .select, target: 2, value: "Red"), BrowserAction(kind: .select, target: 3, value: "Green"), BrowserAction(kind: .scroll, value: "sideways"), BrowserAction(kind: .back, target: 1), BrowserAction(kind: .type, target: 2, value: String(repeating: "a", count: 8001))] {
+            XCTAssertThrowsError(try action.validated(in: snapshot))
+        }
+        let duplicate = BrowserSnapshot(session: UUID(), document: UUID(), revision: 0, page: snapshot.page, controls: [snapshot.controls[0], snapshot.controls[0]])
+        XCTAssertThrowsError(try duplicate.validated())
+        let future = BrowserSnapshot(session: UUID(), document: UUID(), revision: -1, page: snapshot.page, controls: [])
+        XCTAssertThrowsError(try future.validated())
+    }
+
+    func testNaturalRoutineAndSelectedDays() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T10:00:00Z")!
+        func proposal(_ operation: String = "create", id: String = "", commands: [String] = ["open Safari"], first: String = "2026-11-17T10:00:00Z", repetition: String = "weekly", days: [Int] = [3, 5]) throws -> RoutineProposal {
+            let values: [String: Any] = ["operation": operation, "routineID": id, "explanation": "Review first", "name": "Focus", "commands": commands, "firstRun": first, "repetition": repetition, "weekdays": days]
+            return try JSONDecoder().decode(RoutineProposal.self, from: JSONSerialization.data(withJSONObject: values))
+        }
+        let draft = try proposal()
+        let routine = try draft.validated(routines: [], workflows: [], now: now)!
+        XCTAssertEqual(routine.weekdays, [3, 5])
+        XCTAssertEqual(routine.commands, "open Safari")
+        let wrongDay = try proposal(first: "2026-11-18T10:00:00Z").validated(routines: [], workflows: [], now: now)!
+        XCTAssertTrue([3, 5].contains(Calendar.current.component(.weekday, from: wrongDay.nextRun)))
+        XCTAssertTrue(wrongDay.nextRun >= ISO8601DateFormatter().date(from: "2026-11-18T10:00:00Z")!)
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var copy = routine
+        let tuesday = ISO8601DateFormatter().date(from: "2026-11-17T10:01:00Z")!
+        copy.trigger(at: tuesday, calendar: calendar)
+        XCTAssertEqual(ISO8601DateFormatter().string(from: copy.nextRun), "2026-11-19T10:00:00Z")
+        copy.awaitingReview = false
+        copy.trigger(at: ISO8601DateFormatter().date(from: "2026-11-19T10:01:00Z")!, calendar: calendar)
+        XCTAssertEqual(ISO8601DateFormatter().string(from: copy.nextRun), "2026-11-24T10:00:00Z")
+        XCTAssertEqual(try JSONDecoder().decode(ScheduledRoutine.self, from: JSONEncoder().encode(copy)), copy)
+        XCTAssertThrowsError(try proposal(commands: ["shell echo hi"]).validated(routines: [], workflows: [], now: now))
+        XCTAssertThrowsError(try proposal(commands: ["run danger"]).validated(routines: [], workflows: [Workflow(name: "danger", commands: "shell echo hi")], now: now))
+        XCTAssertThrowsError(try proposal(first: "2020-01-01T10:00:00Z").validated(routines: [], workflows: [], now: now))
+        XCTAssertThrowsError(try proposal(days: [3, 8]).validated(routines: [], workflows: [], now: now))
+        XCTAssertThrowsError(try proposal(days: [3, 3]).validated(routines: [], workflows: [], now: now))
+        XCTAssertThrowsError(try proposal("update", id: UUID().uuidString).validated(routines: [], workflows: [], now: now))
+        XCTAssertEqual(try proposal("pause", id: routine.id.uuidString).validated(routines: [routine], workflows: [], now: now)?.id, routine.id)
+    }
+
+    func testUploadGrantsAndContinuation() throws {
+        let snapshot = BrowserSnapshot(session: UUID(), document: UUID(), revision: 0, page: BrowserPage(title: "Upload", url: "https://example.com/form", text: ""), controls: [BrowserControl(id: 1, role: "file", label: "Attachment", editable: false)])
+        let command = try BrowserCommand(snapshot: snapshot, action: BrowserAction(kind: .upload, target: 1))
+        let now = Date()
+        let grant = try BrowserUpload(command: command, fileName: "test.txt", size: 70000, now: now)
+        XCTAssertEqual(try grant.range(index: 0, session: snapshot.session, document: snapshot.document), 0..<65536)
+        XCTAssertEqual(try grant.range(index: 1, session: snapshot.session, document: snapshot.document), 65536..<70000)
+        XCTAssertThrowsError(try grant.range(index: 2, session: snapshot.session, document: snapshot.document))
+        XCTAssertThrowsError(try grant.range(index: -1, session: snapshot.session, document: snapshot.document))
+        XCTAssertThrowsError(try grant.range(index: 0, session: UUID(), document: snapshot.document))
+        XCTAssertThrowsError(try grant.range(index: 0, session: snapshot.session, document: UUID()))
+        XCTAssertThrowsError(try grant.range(index: 0, session: snapshot.session, document: snapshot.document, now: now.addingTimeInterval(121)))
+        XCTAssertThrowsError(try BrowserUpload(command: command, fileName: "../secret", size: 10))
+        XCTAssertThrowsError(try BrowserUpload(command: command, fileName: "big", size: BrowserUpload.maximumSize + 1))
+        XCTAssertThrowsError(try BrowserAction(kind: .click, target: 1).validated(in: snapshot))
+        XCTAssertFalse(BrowserRunPolicy.inspect.allows(command.action))
+        XCTAssertFalse(BrowserRunPolicy.inspect.allows(BrowserAction(kind: .click, target: 1)))
+        XCTAssertTrue(BrowserRunPolicy.inspect.allows(BrowserAction(kind: .observe)))
+        XCTAssertTrue(BrowserRunPolicy.inspect.allows(BrowserAction(kind: .scroll, value: "down")))
+        XCTAssertFalse(BrowserRunPolicy.review.allows(BrowserAction(kind: .observe)))
+        let memory = BrowserTaskMemory(goal: String(repeating: "g", count: 17000), log: Array(repeating: String(repeating: "x", count: 4000), count: 60), provider: .gemini)
+        XCTAssertEqual(memory.goal.count, 16000)
+        XCTAssertEqual(memory.log.count, 30)
+        XCTAssertEqual(memory.log.first?.count, 3000)
+        XCTAssertEqual(try JSONDecoder().decode(BrowserTaskMemory.self, from: JSONEncoder().encode(memory)), memory)
+    }
+    func testReviewedServiceWrites() throws {
+        for kind in ServiceWrite.Kind.allCases {
+            let target = kind == .slack ? "C0123456789" : kind == .notion ? UUID().uuidString : "person@example.com"
+            let write = ServiceWrite(kind: kind, target: target, title: "Hello नमस्ते", text: "A reviewed message 🌍")
+            let request = try write.request(token: "fixture-token")
+            XCTAssertEqual(request.url?.scheme, "https")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-token")
+            XCTAssertTrue(request.httpBody != nil)
+            XCTAssertFalse(String(decoding: request.httpBody!, as: UTF8.self).contains("fixture-token"))
+            if kind == .gmailDraft || kind == .gmailSend {
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                var raw = (kind == .gmailDraft ? (body["message"] as! [String: Any])["raw"] : body["raw"]) as! String
+                raw = raw.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                while raw.count % 4 != 0 { raw += "=" }
+                let mime = String(decoding: Data(base64Encoded: raw)!, as: UTF8.self)
+                XCTAssertTrue(mime.contains("To: person@example.com\r\n"))
+                XCTAssertTrue(mime.contains("Content-Transfer-Encoding: base64"))
+                XCTAssertFalse(mime.contains("Bcc:"))
+            }
+            if kind == .notion { XCTAssertEqual(request.httpMethod, "PATCH") }
+            if kind == .calendar {
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                XCTAssertTrue(body["attendees"] == nil)
+                XCTAssertTrue(request.url?.query?.contains("sendUpdates=none") == true)
+            }
+        }
+        XCTAssertThrowsError(try ServiceWrite(kind: .gmailSend, target: "person@example.com\r\nBcc: other@example.com", title: "Hi", text: "Text").request(token: "x"))
+        XCTAssertThrowsError(try ServiceWrite(kind: .gmailSend, target: "person@example.com", title: "Hi\nBcc: bad", text: "Text").request(token: "x"))
+        XCTAssertThrowsError(try ServiceWrite(kind: .slack, target: "#general", title: "", text: "Text").request(token: "x"))
+        XCTAssertThrowsError(try ServiceWrite(kind: .notion, target: "../../secret", title: "", text: "Text").request(token: "x"))
+        XCTAssertThrowsError(try ServiceWrite(kind: .calendar, target: "", title: "Test", text: "", start: Date(), end: Date().addingTimeInterval(-60)).request(token: "x"))
+    }
+    func testTaskSteeringAndApprovedRoutines() throws {
+        var steering = TaskSteering()
+        XCTAssertThrowsError(try steering.append("  "))
+        XCTAssertThrowsError(try steering.append(String(repeating: "a", count: 8001)))
+        try steering.append("Use Notes instead of Safari")
+        let capturedRevision = steering.revision
+        try steering.append("Then put the window on the right")
+        XCTAssertTrue(steering.revision != capturedRevision)
+        XCTAssertEqual(steering.messages.count, 2)
+        let restored = try JSONDecoder().decode(TaskSteering.self, from: JSONEncoder().encode(steering))
+        XCTAssertEqual(restored, steering)
+        XCTAssertEqual(steering.consume(), ["Use Notes instead of Safari", "Then put the window on the right"])
+        XCTAssertEqual(steering.revision, 2)
+        XCTAssertTrue(steering.messages.isEmpty)
+        for _ in 0..<8 { try steering.append("queued") }
+        XCTAssertThrowsError(try steering.append("too many"))
+
+        let workflows = [Workflow(name: "focus", commands: "open Safari\nleft half\nvolume 25")]
+        var routine = ScheduledRoutine(name: "Focus", commands: "run focus", nextRun: Date().addingTimeInterval(60))
+        XCTAssertTrue(try routine.automaticPlan(workflows: workflows) == nil)
+        routine.executionPolicy = .approvedLocal
+        XCTAssertTrue(try routine.automaticPlan(workflows: workflows) == nil)
+        routine.approvedActions = try routine.plan(workflows: workflows).actions
+        XCTAssertFalse(try routine.automaticPlan(workflows: workflows)!.needsConfirmation)
+        let changed = [Workflow(name: "focus", commands: "open Safari\nright half\nvolume 25")]
+        XCTAssertTrue(try routine.automaticPlan(workflows: changed) == nil)
+        for action in [Action.typeText("hi"), .click("Send"), .shortcut("command v"), .shell("echo hi"), .openURL("https://example.com"), .quitApp("Notes"), .lock, .sleep] {
+            XCTAssertFalse(RoutineExecutionPolicy.supportsAutomatic([action]))
+        }
+        XCTAssertFalse(RoutineExecutionPolicy.supportsAutomatic([]))
+        let old = ScheduledRoutine(name: "Old routine", commands: "open Notes", nextRun: Date())
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
+        object.removeValue(forKey: "executionPolicy"); object.removeValue(forKey: "approvedActions")
+        let migrated = try JSONDecoder().decode(ScheduledRoutine.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(try migrated.automaticPlan(workflows: []) == nil)
+        XCTAssertTrue(NotchConfiguration().visibleSections.contains(.tasks))
+    }
+    func testFocusedIslandGeometryAndActivities() throws {
+        var config = NotchConfiguration()
+        XCTAssertEqual(config.expansionLayout, .island)
+        let screen = CGRect(x: -1512, y: 200, width: 1512, height: 982)
+        let layout = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(layout.frame.width, 440)
+        XCTAssertEqual(layout.frame.height, 267)
+        XCTAssertEqual(layout.frame.midX, screen.midX)
+        XCTAssertEqual(layout.frame.maxY, screen.maxY)
+        config.hiddenSections = []
+        let full = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config)
+        XCTAssertEqual(full.frame, layout.frame)
+        let measured = NotchGeometry.calculate(screen: screen, hardwareWidth: 190, hardwareHeight: 38, expanded: true, configuration: config, measuredGridHeight: 250)
+        XCTAssertEqual(measured.frame.height, 417)
+        let small = NotchGeometry.calculate(screen: CGRect(x: 0, y: 0, width: 320, height: 240), hardwareWidth: 100, hardwareHeight: 0, expanded: true, configuration: config)
+        XCTAssertTrue(small.frame.width <= 304)
+        XCTAssertTrue(small.frame.minY >= 16)
+        let sections = NotchSection.allCases
+        XCTAssertEqual(IslandActivities.active(listening: false, working: false, attention: false, playing: false, timer: false, visible: sections), [.voice])
+        XCTAssertEqual(IslandActivities.active(listening: true, working: false, attention: false, playing: true, timer: false, visible: sections), [.voice, .media])
+        XCTAssertEqual(IslandActivities.active(listening: false, working: false, attention: false, playing: true, timer: true, visible: sections), [.timer, .media])
+        XCTAssertEqual(IslandActivities.active(listening: false, working: true, attention: false, playing: true, timer: true, visible: sections), [.tasks, .timer])
+        XCTAssertEqual(IslandActivities.active(listening: false, working: true, attention: true, playing: false, timer: false, visible: []), [.voice])
+    }
 }
 
 @main
@@ -655,7 +835,13 @@ struct CoreChecks {
             ("acoustic speech endpoints, pauses, noise, and timeouts", suite.testAcousticSpeechEndpoint),
             ("installed app aliases, exact identities and ambiguity", suite.testInstalledAppMatching),
             ("notch wraps all modules into rows and grows down", suite.testNotchWrappingGrid),
-            ("conversation context bounds and modes", suite.testConversationContextBoundsAndModes)
+            ("conversation context bounds and modes", suite.testConversationContextBoundsAndModes),
+            ("browser driver freshness, targets, input and replay bounds", suite.testBrowserDriverContracts),
+            ("natural routine validation and selected weekday recurrence", suite.testNaturalRoutineAndSelectedDays),
+            ("upload grants and task continuation bounds", suite.testUploadGrantsAndContinuation),
+            ("reviewed service request formats and injection boundaries", suite.testReviewedServiceWrites),
+            ("task steering revisions and exact routine approval", suite.testTaskSteeringAndApprovedRoutines),
+            ("focused island geometry and live activity priority", suite.testFocusedIslandGeometryAndActivities)
         ]
         for (name, test) in cases {
             let before = failures.count

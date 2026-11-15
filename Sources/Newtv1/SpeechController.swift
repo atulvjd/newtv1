@@ -6,6 +6,8 @@ import Newtv1Core
 @MainActor
 final class SpeechController: ObservableObject {
     @Published var isListening = false
+    @Published private(set) var isTranscribing = false
+    var isCapturing: Bool { isListening && !isTranscribing }
     @Published var transcript = ""
     @Published var level: Float = 0
     @Published var status = "Microphone off"
@@ -19,9 +21,9 @@ final class SpeechController: ObservableObject {
     var transcribeAudio: ((Data) async throws -> String)?
     var submitsOnPause = true
     var continuousListening = false
-    var silenceDuration: TimeInterval = 1.4
+    var silenceDuration: TimeInterval = 2
     private let cloud = CloudSpeechRecorder()
-    private let engine = AVAudioEngine()
+    private let capture = SpeechAudioCapture()
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -29,7 +31,6 @@ final class SpeechController: ObservableObject {
     private var restartTask: Task<Void, Never>?
     private var finalTimeout: Task<Void, Never>?
     private var endpoint = SpeechEndpoint(now: ProcessInfo.processInfo.systemUptime)
-    private var tapInstalled = false
     private var startToken = UUID()
     private var generation = UUID()
     private var segmentStarted = 0.0
@@ -62,6 +63,7 @@ final class SpeechController: ObservableObject {
             cloud.onLevel = { [weak self] value in self?.level = value }
             cloud.onStatus = { [weak self] message in self?.status = message }
             cloud.onFailure = { [weak self] message in self?.fail(message) }
+            cloud.onTranscribing = { [weak self] active in self?.isTranscribing = active }
             cloud.onFinished = { [weak self] in self?.stop() }
             do {
                 isListening = true
@@ -90,7 +92,8 @@ final class SpeechController: ObservableObject {
     }
 
     private func resetUtterance() {
-        endpoint = SpeechEndpoint(silenceDuration: silenceDuration, now: now)
+        endpoint = SpeechEndpoint(silenceDuration: silenceDuration, now: now, usesSpeechClassification: true)
+        isTranscribing = false
         committedText = ""
         segmentText = ""
         transcript = ""
@@ -115,28 +118,28 @@ final class SpeechController: ObservableObject {
         request.taskHint = .dictation
         request.contextualStrings = Array((wakePhrases + vocabulary + ["show numbers", "left half", "right half", "run focus mode"]).prefix(100))
         self.request = request
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { fail("No working microphone found. Check your input device in Sound settings."); return }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
-            guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
-            var sum: Float = 0
-            for index in 0..<Int(buffer.frameLength) { sum += channel[index] * channel[index] }
-            let rms = sqrt(sum / Float(buffer.frameLength))
-            let power = Double(20 * log10(max(rms, 0.00001)))
-            let timestamp = ProcessInfo.processInfo.systemUptime
-            Task { @MainActor [weak self] in
-                guard let self, self.isListening, self.generation == token, !self.finishing else { return }
-                self.lastAudioSample = timestamp
-                self.level = min(1, rms * 8)
-                self.endpoint.observe(powerDB: power, now: timestamp)
-            }
-        }
-        tapInstalled = true
-        do { engine.prepare(); try engine.start() }
-        catch { fail("Microphone could not start. Check the selected input device and try again."); return }
-        status = "Listening · finish speaking to send"
+        do {
+            try capture.start(recording: false, onBuffer: { buffer in request.append(buffer) },
+                onSample: { [weak self] power, rms, timestamp in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isCapturing, self.generation == token, !self.rotating else { return }
+                        self.lastAudioSample = timestamp
+                        self.level = min(1, rms * 8)
+                        self.endpoint.observe(powerDB: power, now: timestamp)
+                    }
+                }, onSpeech: { [weak self] probability, timestamp in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isCapturing, self.generation == token, !self.rotating else { return }
+                        self.endpoint.observeSpeech(probability: probability, through: timestamp)
+                    }
+                }, onFailure: { [weak self] message in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isListening, self.generation == token else { return }
+                        self.fail(message)
+                    }
+                })
+        } catch { fail("Microphone or voice detection could not start: " + error.localizedDescription); return }
+        status = "Listening · pause for two seconds to send"
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self, self.isListening, self.generation == token else { return }
@@ -167,10 +170,6 @@ final class SpeechController: ObservableObject {
 
     private func tick() {
         guard isListening, !finishing, !rotating else { return }
-        guard now - lastAudioSample < 3 else {
-            fail("The microphone stopped delivering audio. Check your input device and try again.")
-            return
-        }
         switch endpoint.state(now: now) {
         case .idleTimeout:
             stop()
@@ -185,6 +184,10 @@ final class SpeechController: ObservableObject {
             status = "Waiting for you to finish…"
         default:
             break
+        }
+        if isCapturing, now - lastAudioSample >= 2 {
+            fail("The microphone stopped delivering audio. Check your input device and try again.")
+            return
         }
         if isListening, !finishing, now - segmentStarted >= 50 {
             rotating = true
@@ -212,14 +215,14 @@ final class SpeechController: ObservableObject {
         finishing = true
         rotating = false
         restartTask?.cancel()
-        status = "Finishing transcription…"
+        isTranscribing = true
+        status = "Microphone off · finishing transcription…"
         endAudio()
         awaitFinalResult()
     }
 
     private func endAudio() {
-        engine.stop()
-        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        capture.discard()
         level = 0
         request?.endAudio()
     }
@@ -267,6 +270,7 @@ final class SpeechController: ObservableObject {
     func stop() {
         startToken = UUID()
         isListening = false
+        isTranscribing = false
         cloud.stop()
         monitor?.invalidate()
         monitor = nil

@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Newtv1 Browser Context",
-  "version": "0.1.0",
-  "description": "Preview the current page and share its text locally with Newtv1 on request.",
+  "name": "Newtv1 Browser Companion",
+  "version": "0.3.0",
+  "description": "Preview a page or connect one tab for reviewed Newtv1 browser tasks.",
   "permissions": ["activeTab", "scripting", "nativeMessaging"],
-  "action": { "default_popup": "popup.html", "default_title": "Share page with Newtv1" }
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Connect a page to Newtv1" }
 }

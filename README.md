@@ -26,13 +26,21 @@ Guide answers can include up to eight validated rectangles. **Show highlights** 
 
 ### Tasks and conversation history
 
-Agent tasks show a goal, approval state, proposed steps, progress, and result. Plans execute one at a time and stop on the first error. During agent-driven Mac control, Escape or physical mouse input cancels execution; completed actions are not rolled back. This is bounded plan execution, not a self-correcting browser agent.
+Agent tasks show a goal, approval state, proposed steps, progress, and result. Plans execute one at a time and stop on the first error. During agent-driven Mac control, Escape or physical mouse input cancels execution; completed actions are not rolled back. Follow-ups in Tasks retain the original goal and recent conversation. Opt in to fresh control labels to continue a paused guided task in another eight-observation batch. Local memory optionally retains task conversations across launches.
 
 Up to 30 question/answer pairs stay in memory, and recent text supplies follow-up context. **Remember conversations on this Mac** optionally writes text history to `~/Library/Application Support/Newtv1/conversations.json` with owner-only file permissions. Screenshots and keys are excluded. Disabling memory stops loading/saving; **Clear conversation history** removes previously saved text after confirmation.
 
 Read the [HeyClicky review](docs/HEYCLICKY_REVIEW.md) for the public-site research, feature map, privacy comparison, gaps, and acceptance milestones. Complete parity and measured superiority are not claimed.
 
-Newtv1 lives at the MacBook notch. It starts as an accessory app with no Dock icon or dashboard window. Hover over the notch to expand it; move away to collapse it. Click the sparkle or pin button to keep the controls expanded. The compact wings show microphone and execution status without placing controls behind the camera. The notch expands horizontally across the display by default, with modules side by side and listening controls at the right. Horizontal sections scroll when needed. The expanded panel includes live transcription, listening, Stop, and a command-center button. Closing the command center leaves the notch running.
+Newtv1 lives at the MacBook notch. It starts as an accessory app with no Dock icon or dashboard window. Hover over the notch to expand it; move away to collapse it. Click the sparkle or pin button to keep the controls expanded. The compact wings show microphone and execution status without placing controls behind the camera. The default Dynamic Island stays compact at rest and expands into one focused activity. The activities menu opens every enabled module. The optional horizontal layout wraps modules into rows above listening controls without scrolling. The expanded panel includes live transcription, listening, Stop, and a command-center button. Closing the command center leaves the notch running.
+
+## Browser tasks and routines (0.7)
+
+Reload the unpacked extension after upgrading. Click **Connect this tab**, then open **Browser** in Newtv1, inspect the text/control preview, enable sharing with your selected AI provider and describe a task. Every click, text replacement, selection, scroll or Back action is reviewed. Newt observes again after execution. Changed documents, stale control revisions and expired commands are rejected; missing receipts never cause automatic mutation replay. Passwords, frames and arbitrary scripts are unavailable. File attachments require choosing one file up to 20 MB and approving the displayed website in Newtv1; sites may upload immediately. File bytes are not sent to the AI provider. Crossing to a different website requires reconnecting. Browser task goals and recent observations support follow-ups and opt-in local history. After restarting, reconnect a tab and explicitly continue. Upload bytes and permission grants are excluded from history. Optional inspection continuation runs observe/scroll actions automatically; clicks, edits and uploads retain review.
+
+Say **“browser …”** to open a task draft, or **“schedule …” / “every …”** to preview a routine. Routines supports creating, updating, pausing, resuming and removing schedules from a sentence. Review the commands, local date/time and recurrence before saving. Weekly routines can select several weekdays. Saving never runs the task immediately; due occurrences wait for review while Newtv1 is open. Settings includes saved response-style preferences for answers and task planning.
+
+Full parity remains incomplete: fully unattended agents, multi-account service management, production account registration and signed automatic updates require further work or external setup. Browser action code has regression coverage; installed-extension/account end-to-end validation remains pending.
 
 ## Notch Studio
 
@@ -232,3 +240,31 @@ Settings → AI brain now selects OpenAI or Gemini, with separate Keychain crede
 Save a Gemini key in Settings, or use the built setup helper with `Newtv1Setup /absolute/path/to/Newtv1.app --gemini --verify` and enter the key through hidden stdin. Keys never belong in source code or the browser extension. Automatic audio transcription sends recordings to the selected provider only when explicitly enabled. Local Apple speech recognition remains the default.
 
 Implementation references: [Gemini generateContent](https://ai.google.dev/api/generate-content), [structured output](https://ai.google.dev/gemini-api/docs/structured-output), and [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search).
+
+## Reviewed service actions (0.8)
+
+Connections → **Write to a connected service** supports Gmail drafts and sending, new Drive text files, Calendar events without attendees, Slack channel messages and appended Notion paragraphs. Fill in an explicit destination and content, review the frozen proposal, then confirm. The form sends to the named service without AI. Provider receipts are displayed; uncertain or failed writes are never retried automatically.
+
+Google stays read-only by default. Enable **Request Google write permissions when connecting** and reconnect with your own Desktop OAuth client to request Gmail compose/send, Drive file creation and Calendar event scopes. Slack needs `chat:write` and channel membership; Notion needs Insert content. Provider setup and live validation remain required.
+
+### Brave installation
+
+Use `bash scripts/install-browser-host.sh EXTENSION_ID brave` after loading the unpacked extension. On macOS, Brave reads the Chrome-compatible native-host directory; the installer registers the same exact extension ID there and in Brave's directory. It copies the signed helper to `~/Library/Application Support/Newtv1/NativeHost/Newtv1BrowserHost`, so its launch path is stable outside Desktop. Re-run the installer after rebuilding the native helper. Other supported browser scopes are `chrome`, `edge`, `arc`, `vivaldi`, `chromium`, or `all` (the default).
+
+Live validation on 14 November 2026: Brave extension 0.3.0 connected to the local demo, Gemini proposed text entry and a button click, each step was approved, and the page displayed “Hello, Newt.” This validates that fixture flow; it does not establish reliability on arbitrary websites.
+
+## Task lifecycle and scheduled local runs (0.9)
+
+Enable/reorder **Tasks** in Notch Studio to see the three newest unarchived Mac tasks with status and a link to their full conversation. Tasks supports names, search, archiving/restoring, voice follow-ups, and routine proposals from a task's goal. Typed follow-ups sent while a guided task is planning/running are queued; a proposal created before a new follow-up is discarded and replanned. Queues are bounded to eight messages and preserved by opt-in task history. Direct fixed-plan tasks must finish or be stopped before a new follow-up.
+
+Routines → Edit/New → **Approve these local actions for automatic scheduled runs** binds approval to the exact expanded actions. Only app launches, window placement, volume/mute and waits qualify. Changing any referenced workflow returns the occurrence to review. Clicks, typing, shortcuts, web navigation, shell and account changes continue to require review. Runs serialize with other work and require Newtv1 to be open. Missed occurrences coalesce into one run. **Stop All Actions** pauses automatic routines until the Pause switch in Routines is turned off; normal quitting preserves the pause choice. Existing schedules remain review-first.
+
+## Focused Dynamic Island (0.10)
+
+The default notch now uses a compact pill and a 440-point expanded activity card. It shows one primary live activity and, when appropriate, a secondary indicator. Voice/attention, running tasks, timers and playing media take priority in that order; enabled modules remain in the activities menu. A running timer shows its countdown in compact mode.
+
+Hover or press-and-hold to expand. Click the leading activity or secondary indicator to focus it; swipe horizontally between two live activities. Escape, the close button or an upward drag collapses it. Clicking outside collapses an unpinned island. The menu includes Keep expanded, workspace and customization. Listening, Stop and workspace stay directly accessible. Reduce Motion disables native window animation.
+
+No module dashboard or scrolling is shown in the focused island. Module content determines the expanded height within the display bounds. Notch Studio has a matching focused preview and retains the optional horizontal/vertical layouts. Upgrading once selects the new layout and disables pinned-on-launch while preserving module preferences, accent, shortcuts and workflows.
+
+This adapts the iPhone interaction model for a Mac pointer and physical camera cutout; it does not claim to reproduce Apple's private implementation.
