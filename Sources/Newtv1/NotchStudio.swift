@@ -15,18 +15,15 @@ struct NotchStudio: View {
     @StudioState private var editingID: UUID?
     @StudioState private var previewHeight: CGFloat = 314
     private var tint: Color { model.notch.tint }
-    private let card = Color.white.opacity(0.035)
+    private let card = WorkspaceTheme.card
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Make the notch yours.").font(.system(size: 29, weight: .semibold)).tracking(-0.8)
-                    Text("Your layout. Your shortcuts. Every change appears live.").font(.system(size: 12)).foregroundStyle(.gray)
-                }
+                WorkspaceHeading(title: "Your own little island.", subtitle: "Shape your notch around the things you use. Changes appear live.")
                 Spacer()
                 Menu { Button("Import profile…", action: importProfile); Button("Export profile…", action: exportProfile); Divider(); Button("Reset notch settings") { model.notch = NotchConfiguration(); message = "Notch settings reset. Your workflows, notes, and API key were kept." } } label: { Label("Profiles", systemImage: "square.and.arrow.up") }.menuStyle(.borderlessButton).fixedSize()
-                Button("Show notch") { model.onPreviewNotch?() }.buttonStyle(.bordered)
+                Button("Show notch") { model.onPreviewNotch?() }.buttonStyle(WorkspaceButtonStyle())
             }
             preview
             HStack(spacing: 9) {
@@ -36,12 +33,10 @@ struct NotchStudio: View {
                     }.buttonStyle(.plain)
                 }
                 Spacer()
-                Text("PRESETS").font(.system(size: 8, design: .monospaced)).tracking(1.5).foregroundStyle(.gray)
+                Text("PRESETS").font(.system(size: 8, design: .monospaced)).tracking(1.5).foregroundStyle(WorkspaceTheme.secondary)
             }
             if let message { Text(message).font(.system(size: 12)).foregroundStyle(tint).textSelection(.enabled) }
-            Picker("Customize", selection: $tab) {
-                ForEach(["Appearance", "Layout", "Modules", "Behavior"], id: \.self) { Text($0) }
-            }.pickerStyle(.segmented).labelsHidden()
+            WorkspaceTabs(items: ["Appearance", "Layout", "Modules", "Behavior"], selection: $tab)
             switch tab {
             case "Appearance": appearance
             case "Layout": layout
@@ -137,7 +132,7 @@ struct NotchStudio: View {
                 signalSample("Listening", .listening)
                 signalSample("Working", .working)
                 Spacer()
-                Text("STATUS MOTION").font(.system(size: 8, design: .monospaced)).tracking(1).foregroundStyle(.gray)
+                Text("STATUS MOTION").font(.system(size: 8, design: .monospaced)).tracking(1).foregroundStyle(WorkspaceTheme.secondary)
             }
             Toggle("Show live microphone waveform", isOn: $model.notch.showWaveform)
             Toggle("Compact module spacing", isOn: $model.notch.compactRows)
@@ -147,7 +142,7 @@ struct NotchStudio: View {
     private var layout: some View {
         group("Layout & placement", "Attached mode always keeps the camera cutout clear.") {
             Picker("Expansion", selection: $model.notch.expansionLayout) { Text("Dynamic Island").tag(NotchExpansionLayout.island); Text("Horizontal bar").tag(NotchExpansionLayout.horizontal); Text("Vertical panel").tag(NotchExpansionLayout.vertical) }.pickerStyle(.segmented)
-            if model.notch.expansionLayout == .island { Text("A focused 440-point island. Live activities take priority; the activities menu keeps every enabled module within reach. Hover or hold to expand, swipe up or press Escape to collapse.").font(.system(size: 12)).foregroundStyle(.gray) }
+            if model.notch.expansionLayout == .island { Text("A focused 440-point island. Live activities take priority; the activities menu keeps every enabled module within reach. Hover or hold to expand, swipe up or press Escape to collapse.").font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary) }
             if model.notch.expansionLayout == .horizontal {
                 Toggle("Expand across the full display width", isOn: $model.notch.fullWidthExpansion)
                 slider("Horizontal module row height", value: $model.notch.horizontalHeight, range: 120...260, format: "%.0f pt")
@@ -185,16 +180,16 @@ struct NotchStudio: View {
                         Toggle(section.title, isOn: Binding(get: { !model.notch.hiddenSections.contains(section) }, set: { enabled in
                             model.notch.hiddenSections.removeAll { $0 == section }
                             if !enabled { model.notch.hiddenSections.append(section) }
-                        })).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        })).labelsHidden().toggleStyle(WorkspaceToggleStyle()).controlSize(.small)
                     }.font(.system(size: 12)).padding(.vertical, 3)
                 }
-                Text("Listening, Stop, and customization controls stay available even when every section is hidden.").font(.system(size: 11)).foregroundStyle(.gray)
+                Text("Listening, Stop, and customization controls stay available even when every section is hidden.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
             }
             group("Quick buttons", "Choose an icon and a command. Buttons follow the same execution and approval rules as typed commands.") {
                 ForEach(Array(model.notch.shortcuts.enumerated()), id: \.element.id) { index, item in
                     HStack {
                         Image(systemName: NSImage(systemSymbolName: item.icon, accessibilityDescription: nil) == nil ? "bolt" : item.icon).foregroundStyle(tint).frame(width: 20)
-                        VStack(alignment: .leading, spacing: 3) { Text(item.title); Text(item.command).font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).lineLimit(1) }
+                        VStack(alignment: .leading, spacing: 3) { Text(item.title); Text(item.command).font(.system(size: 10, design: .monospaced)).foregroundStyle(WorkspaceTheme.secondary).lineLimit(1) }
                         Spacer()
                         Button { moveShortcut(index, by: -1) } label: { Image(systemName: "arrow.up") }.disabled(index == 0)
                         Button { moveShortcut(index, by: 1) } label: { Image(systemName: "arrow.down") }.disabled(index == model.notch.shortcuts.count - 1)
@@ -203,13 +198,13 @@ struct NotchStudio: View {
                     }.font(.system(size: 12)).buttonStyle(.borderless)
                 }
                 Divider()
-                HStack { TextField("Button name", text: $shortcutTitle); TextField("SF Symbol · e.g. bolt", text: $shortcutIcon) }.textFieldStyle(.roundedBorder)
-                TextField("Command · e.g. run focus mode", text: $shortcutCommand).textFieldStyle(.roundedBorder)
+                HStack { TextField("Button name", text: $shortcutTitle); TextField("SF Symbol · e.g. bolt", text: $shortcutIcon) }.textFieldStyle(WorkspaceFieldStyle())
+                TextField("Command · e.g. run focus mode", text: $shortcutCommand).textFieldStyle(WorkspaceFieldStyle())
                 HStack {
-                    Text("Up to 8 buttons").font(.system(size: 10)).foregroundStyle(.gray)
+                    Text("Up to 8 buttons").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
                     Spacer()
                     if editingID != nil { Button("Cancel edit", action: clearEditor) }
-                    Button(editingID == nil ? "Add button" : "Save button", action: saveShortcut).buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(editingID == nil && model.notch.shortcuts.count >= 8)
+                    Button(editingID == nil ? "Add button" : "Save button", action: saveShortcut).buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black).disabled(editingID == nil && model.notch.shortcuts.count >= 8)
                 }
             }
             group("Scratchpad", "Saved locally. This note stays on this Mac and is excluded from exported profiles.") {
@@ -228,25 +223,25 @@ struct NotchStudio: View {
             Toggle("Expand when something needs attention", isOn: $model.notch.expandOnError)
             Toggle("Start pinned on the next launch", isOn: $model.notch.pinnedOnLaunch)
             Toggle("Animate changes", isOn: $model.notch.animations)
-            Text("macOS Reduce Motion is respected. Timers run during this app session and do not prevent your Mac from sleeping. Use the menu-bar Customize Notch action if you turn off hover expansion.").font(.system(size: 11)).foregroundStyle(.gray)
+            Text("macOS Reduce Motion is respected. Timers run during this app session and do not prevent your Mac from sleeping. Use the menu-bar Customize Notch action if you turn off hover expansion.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
         }
     }
 
     private func group<Content: View>(_ title: String, _ subtitle: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.system(size: 17, weight: .medium))
-            Text(subtitle).font(.system(size: 11)).foregroundStyle(.gray).lineSpacing(3)
+            Text(subtitle).font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary).lineSpacing(3)
             content()
-        }.padding(22).frame(maxWidth: .infinity, alignment: .leading).background(card, in: RoundedRectangle(cornerRadius: 14)).font(.system(size: 12)).toggleStyle(.switch)
+        }.padding(22).frame(maxWidth: .infinity, alignment: .leading).background(card, in: RoundedRectangle(cornerRadius: 14)).font(.system(size: 12)).toggleStyle(WorkspaceToggleStyle())
     }
     private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, format: String) -> some View {
-        VStack(spacing: 7) { HStack { Text(title); Spacer(); Text(String(format: format, value.wrappedValue)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray) }; Slider(value: value, in: range) }
+        VStack(spacing: 7) { HStack { Text(title); Spacer(); Text(String(format: format, value.wrappedValue)).font(.system(size: 10, design: .monospaced)).foregroundStyle(WorkspaceTheme.secondary) }; Slider(value: value, in: range) }
     }
     private func color(_ hex: String) -> Color { var config = model.notch; config.accentHex = hex; return config.tint }
     private func signalSample(_ title: String, _ state: NewtSignalState) -> some View {
         HStack(spacing: 6) {
             NewtSignal(state: state, level: 0.55, tint: tint, animated: model.notch.animations).frame(width: 34, height: 34)
-            Text(title).font(.system(size: 10)).foregroundStyle(.gray)
+            Text(title).font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
         }
     }
     private func screenID(_ screen: NSScreen) -> String { String((screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0) }

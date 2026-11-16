@@ -43,14 +43,7 @@ enum ScreenContext {
     static func id(_ screen: NSScreen) -> UInt32 { (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0 }
 
     static func readText(_ screen: CapturedScreen) async throws -> String {
-        let data = screen.jpeg
-        return try await Task.detached(priority: .userInitiated) {
-            guard let bitmap = NSBitmapImageRep(data: data), let image = bitmap.cgImage else { throw Newtv1Failure("Could not read this image.") }
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
-            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-        }.value
+        try await ScreenOCRProcess().read(screen.jpeg)
     }
 }
 

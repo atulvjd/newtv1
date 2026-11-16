@@ -234,6 +234,7 @@ final class NotchController: ObservableObject {
             window.title = "Newtv1"
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            window.backgroundColor = NSColor(WorkspaceTheme.background)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 1040, height: 740)
             window.contentView = NSHostingView(rootView: ContentView(model: model, speech: model.speech).frame(minWidth: 1040, minHeight: 740).preferredColorScheme(.dark))

@@ -22,7 +22,7 @@ private struct Newtv1Menu: View {
     @ObservedObject var model: AppModel
     @ObservedObject var speech: SpeechController
     var body: some View {
-        Button(speech.isListening ? "Stop Listening" : "Start Listening  ⌥Space") { model.toggleListening() }
+        Button(speech.isTranscribing ? "Cancel Transcription" : speech.isListening ? "Stop Listening" : "Start Listening  ⌥Space") { model.toggleListening() }
         Button("Talk with Newt") { model.openCommandCenter(page: .companion) }
         Button("Tasks") { model.openCommandCenter(page: .jobs) }
         Button("Open Command Center") { model.openCommandCenter() }

@@ -1,5 +1,7 @@
 import Foundation
 import CoreGraphics
+import CoreText
+import ImageIO
 import Newtv1Core
 
 // Dependency-free regression runner so the suite also runs with Command Line Tools,
@@ -504,6 +506,120 @@ final class CommandTests {
         XCTAssertEqual(try ApplicationMatch.resolve("cafe notes", in: [unicode]), unicode)
     }
 
+    func testSystemCommands() throws {
+        let examples: [(String, SystemCommand)] = [
+            ("dark mode", .appearance(.dark)), ("light mode", .appearance(.light)), ("toggle dark mode", .appearance(.toggle)),
+            ("turn off wi-fi", .wifi(false)), ("wifi on", .wifi(true)), ("hide dock", .dockAutoHide(true)), ("show dock", .dockAutoHide(false)),
+            ("mute mic", .inputMute(true)), ("unmute microphone", .inputMute(false)), ("microphone volume fifty percent", .inputVolume(50)),
+            ("set microphone volume to 0%", .inputVolume(0)), ("volume up", .volumeChange(10)), ("volume down five percent", .volumeChange(-5)),
+            ("brightness up three steps", .brightness(3)), ("brightness down", .brightness(-1)),
+            ("audio output MacBook Pro Speakers", .audioDevice(.output, "MacBook Pro Speakers")),
+            ("set audio input to USB Microphone", .audioDevice(.input, "USB Microphone")),
+            ("keep awake for thirty minutes", .keepAwake(30)), ("stay awake for 180 minutes", .keepAwake(180)),
+            ("allow sleep", .allowSleep), ("sleep display", .displaySleep), ("play pause", .media(.playPause)),
+            ("next song", .media(.next)), ("previous track", .media(.previous)), ("open sound settings", .settings(.sound)),
+            ("open bluetooth settings", .settings(.bluetooth)), ("open wi-fi settings", .settings(.wifi))
+        ]
+        for (phrase, expected) in examples {
+            XCTAssertEqual(try parser.parse(phrase).actions, [.system(expected)])
+            try expected.validate()
+            XCTAssertFalse(expected.summary.isEmpty)
+        }
+        for phrase in ["microphone volume 101", "microphone volume -1", "input volume nan", "volume up 0", "volume down 26", "brightness up 11", "brightness down -1", "brightness up 9223372036854775807", "keep awake for 0 minutes", "keep awake for 181 minutes", "keep awake for 10 hours", "keep awake for nan minutes", "keep awake for 30 minutes ignored"] { XCTAssertThrowsError(try parser.parse(phrase), phrase) }
+        XCTAssertEqual(try parser.parse("type wifi off then light mode").actions, [.typeText("wifi off then light mode")])
+        XCTAssertEqual(try parser.parse("audio output Studio $(name)").actions, [.system(.audioDevice(.output, "Studio $(name)"))])
+        XCTAssertThrowsError(try SystemCommand.audioDevice(.input, "bad\nname").validate())
+        XCTAssertThrowsError(try SystemCommand.keepAwake(Int.max).validate())
+        XCTAssertThrowsError(try SystemCommand.brightness(Int.min).validate())
+        XCTAssertThrowsError(try SystemCommand.inputVolume(101).validate())
+        let chained = try parser.parse("dark mode then keep awake for 30 minutes then volume up")
+        XCTAssertEqual(chained.actions, [.system(.appearance(.dark)), .system(.keepAwake(30)), .system(.volumeChange(10))])
+        XCTAssertFalse(chained.requiresAccessibility)
+        XCTAssertTrue(try parser.parse("brightness up").requiresAccessibility)
+        XCTAssertTrue(try parser.parse("next track").requiresAccessibility)
+        XCTAssertTrue(try parser.parse("wifi off").needsConfirmation)
+        XCTAssertTrue(try parser.parse("sleep display").needsConfirmation)
+        XCTAssertFalse(try parser.parse("wifi on").needsConfirmation)
+        let wifiWorkflow = Workflow(name: "disconnect", commands: "wifi off")
+        XCTAssertTrue(try WorkflowResolver().expand(parser.parse("run disconnect"), workflows: [wifiWorkflow]).needsConfirmation)
+        let model = try JSONDecoder().decode(ModelPlan.self, from: Data(#"{"commands":["dark mode","wifi off"],"explanation":"Proposed"}"#.utf8))
+        XCTAssertTrue(try model.validated(transcript: "change settings", workflows: []).requiresReview)
+        for (_, command) in examples { XCTAssertFalse(RoutineExecutionPolicy.supportsAutomatic([.system(command)])) }
+        let actions = examples.map { Action.system($0.1) } + [.openApp("Notes"), .volume(50)]
+        XCTAssertEqual(try JSONDecoder().decode([Action].self, from: JSONEncoder().encode(actions)), actions)
+    }
+
+    func testAudioDeviceMatchingAndQuarterWindows() throws {
+        let devices = [AudioDeviceIdentity(id: "uid-A", name: "MacBook Pro Speakers"), AudioDeviceIdentity(id: "uid-B", name: "USB Headset")]
+        XCTAssertEqual(try AudioDeviceMatch.resolve("  macbook  pro speakers ", devices: devices), "uid-A")
+        XCTAssertEqual(try AudioDeviceMatch.resolve("uid-B", devices: devices), "uid-B")
+        XCTAssertThrowsError(try AudioDeviceMatch.resolve("USB", devices: devices))
+        XCTAssertThrowsError(try AudioDeviceMatch.resolve("", devices: devices))
+        XCTAssertThrowsError(try AudioDeviceMatch.resolve("USB Headset", devices: devices + [AudioDeviceIdentity(id: "uid-C", name: "USB Headset")]))
+        XCTAssertEqual(try AudioDeviceMatch.resolve("uid-C", devices: devices + [AudioDeviceIdentity(id: "uid-C", name: "USB Headset")]), "uid-C")
+        let bounds = CGRect(x: -1440, y: 40, width: 1440, height: 800)
+        let positions = [("top left quarter", "topLeft", CGRect(x: -1440, y: 440, width: 720, height: 400)),
+                         ("top right quarter", "topRight", CGRect(x: -720, y: 440, width: 720, height: 400)),
+                         ("bottom left quarter", "bottomLeft", CGRect(x: -1440, y: 40, width: 720, height: 400)),
+                         ("bottom right quarter", "bottomRight", CGRect(x: -720, y: 40, width: 720, height: 400))]
+        for (phrase, key, expected) in positions {
+            XCTAssertEqual(try parser.parse(phrase).actions, [.window(key)])
+            XCTAssertEqual(WindowPlacement.frame(key, visible: bounds, currentSize: CGSize(width: 900, height: 600)), expected)
+        }
+        XCTAssertEqual(WindowPlacement.frame("maximize", visible: bounds, currentSize: .zero), bounds)
+        XCTAssertEqual(WindowPlacement.frame("unsupported", visible: bounds, currentSize: .zero), nil)
+        XCTAssertEqual(WindowPlacement.frame("topLeft", visible: .zero, currentSize: .zero), nil)
+        XCTAssertEqual(WindowPlacement.frame("center", visible: bounds, currentSize: CGSize(width: 2000, height: 2000)), bounds)
+    }
+
+    func testLocalScreenOCR() throws {
+        XCTAssertThrowsError(try ScreenTextRecognition.read(Data()))
+        XCTAssertThrowsError(try ScreenTextRecognition.read(Data("not an image".utf8)))
+        XCTAssertThrowsError(try ScreenTextRecognition.read(Data(repeating: 0, count: 5_000_001)))
+        let context = CGContext(data: nil, width: 800, height: 180, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 800, height: 180))
+        let attributes: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 42, nil), NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0, alpha: 1)]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Newtv1 screen check 742", attributes: attributes))
+        context.textPosition = CGPoint(x: 30, y: 75); CTLineDraw(line, context)
+        let image = context.makeImage()!
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let text = try ScreenTextRecognition.read(data as Data)
+        XCTAssertTrue(text.lowercased().contains("screen check"))
+        XCTAssertTrue(text.contains("742"))
+        if let helper = ProcessInfo.processInfo.environment["NEWTV1_SCREEN_READER_PATH"] {
+            let process = Process(), input = Pipe(), output = Pipe()
+            process.executableURL = URL(fileURLWithPath: helper)
+            process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+            try process.run()
+            try input.fileHandleForWriting.write(contentsOf: data as Data)
+            try input.fileHandleForWriting.close()
+            let response = try output.fileHandleForReading.readToEnd() ?? Data()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+            let decoded = try JSONSerialization.jsonObject(with: response) as? [String: String]
+            XCTAssertTrue(decoded?["text"]?.contains("742") == true)
+            XCTAssertTrue(decoded?["text"]?.lowercased().contains("screen check") == true)
+        }
+    }
+
+    func testScreenRequestRoutingAndExpiry() throws {
+        for phrase in ["What’s on my screen?", "what is on my screen", "look at my screen", "describe my screen"] {
+            XCTAssertEqual(ScreenRequest.parse(phrase), .preview("Describe what is visible on my screen and help me understand it."))
+        }
+        XCTAssertEqual(ScreenRequest.parse("read my screen"), .readText)
+        XCTAssertEqual(ScreenRequest.parse("ask about my screen Where is Save?"), .preview("Where is Save?"))
+        XCTAssertEqual(ScreenRequest.parse("discard screen"), .discard)
+        for literal in ["type read my screen", "search for what is on my screen", "read my screen then quit Notes", "ask about screen ", "open screen.app"] { XCTAssertEqual(ScreenRequest.parse(literal), nil) }
+        let capture = Date(timeIntervalSince1970: 1000)
+        XCTAssertTrue(ScreenContextPolicy.isFresh(capture, now: capture))
+        XCTAssertTrue(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(120)))
+        XCTAssertFalse(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(121)))
+        XCTAssertFalse(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(-1)))
+    }
+
     func testAcousticSpeechEndpoint() throws {
         var endpoint = SpeechEndpoint(now: 0)
         XCTAssertEqual(endpoint.state(now: 0), .waiting)
@@ -518,7 +634,10 @@ final class CommandTests {
         XCTAssertEqual(endpoint.state(now: 4.2), .pausing)
         endpoint.transcriptChanged(now: 4.3)
         XCTAssertEqual(endpoint.state(now: 4.5), .pausing)
-        XCTAssertEqual(endpoint.state(now: 5.8), .finished)
+        endpoint.transcriptChanged(now: 4.99)
+        XCTAssertEqual(endpoint.state(now: 5), .finished)
+        endpoint.transcriptChanged(now: 5.1)
+        XCTAssertEqual(endpoint.state(now: 5.1), .finished)
 
         var resumed = SpeechEndpoint(silenceDuration: 1.4, now: 0)
         for sample in 1...8 { resumed.observe(powerDB: -26, now: Double(sample) / 10) }
@@ -540,7 +659,7 @@ final class CommandTests {
         noise.observe(powerDB: .nan, now: 2)
         noise.observe(powerDB: -20, now: .nan)
         XCTAssertFalse(noise.hasSpeech)
-        XCTAssertEqual(SpeechEndpoint(silenceDuration: .nan, now: 0).silenceDuration, 1.4)
+        XCTAssertEqual(SpeechEndpoint(silenceDuration: .nan, now: 0).silenceDuration, 2)
         XCTAssertEqual(SpeechEndpoint(silenceDuration: 0.1, now: 0).silenceDuration, 0.6)
         XCTAssertEqual(SpeechEndpoint(silenceDuration: 100, now: 0).silenceDuration, 3)
 
@@ -549,6 +668,41 @@ final class CommandTests {
         slow.observe(powerDB: -75, now: 1.1)
         XCTAssertEqual(slow.state(now: 3.9), .pausing)
         XCTAssertEqual(slow.state(now: 4.1), .finished)
+
+        // A stale "speaking" flag must not latch when the audio callbacks stop.
+        var disconnected = SpeechEndpoint(now: 0)
+        for sample in 1...10 { disconnected.observe(powerDB: -26, now: Double(sample) / 10) }
+        XCTAssertEqual(disconnected.state(now: 1), .speaking)
+        XCTAssertEqual(disconnected.state(now: 2.9), .pausing)
+        XCTAssertEqual(disconnected.state(now: 3), .finished)
+
+        // Loud ambient noise is not speech when the on-device classifier rejects it.
+        var classified = SpeechEndpoint(now: 0, usesSpeechClassification: true)
+        for sample in 1...20 {
+            let time = Double(sample) / 10
+            classified.observe(powerDB: -30, now: time)
+            classified.observeSpeech(probability: 0.01, through: time)
+        }
+        XCTAssertFalse(classified.hasSpeech)
+        classified.observeSpeech(probability: 0.9, through: 2.1)
+        XCTAssertEqual(classified.state(now: 2.1), .speaking)
+        for sample in 22...40 {
+            let time = Double(sample) / 10
+            classified.observe(powerDB: -30, now: time)
+            classified.observeSpeech(probability: 0.01, through: time)
+        }
+        XCTAssertEqual(classified.state(now: 4), .pausing)
+        classified.transcriptChanged(now: 4.05)
+        XCTAssertEqual(classified.state(now: 4.11), .finished)
+        // Resuming before two seconds extends the deadline using the audio timestamp.
+        classified.observeSpeech(probability: 0.95, through: 4.12)
+        XCTAssertEqual(classified.state(now: 4.12), .speaking)
+        classified.observeSpeech(probability: 0, through: 4.3)
+        XCTAssertEqual(classified.state(now: 6.11), .pausing)
+        XCTAssertEqual(classified.state(now: 6.13), .finished)
+        classified.observeSpeech(probability: 0.95, through: 3) // stale queued result
+        classified.observeSpeech(probability: .nan, through: 6)
+        XCTAssertEqual(classified.state(now: 6.13), .finished)
     }
 
     func testGeminiProviderTranslation() throws {
@@ -841,7 +995,11 @@ struct CoreChecks {
             ("upload grants and task continuation bounds", suite.testUploadGrantsAndContinuation),
             ("reviewed service request formats and injection boundaries", suite.testReviewedServiceWrites),
             ("task steering revisions and exact routine approval", suite.testTaskSteeringAndApprovedRoutines),
-            ("focused island geometry and live activity priority", suite.testFocusedIslandGeometryAndActivities)
+            ("focused island geometry and live activity priority", suite.testFocusedIslandGeometryAndActivities),
+            ("system command bounds, risks, workflows and persistence", suite.testSystemCommands),
+            ("exact audio devices and quarter-window geometry", suite.testAudioDeviceMatchingAndQuarterWindows),
+            ("screen requests, literal boundaries and preview expiry", suite.testScreenRequestRoutingAndExpiry),
+            ("bounded local screen text recognition", suite.testLocalScreenOCR)
         ]
         for (name, test) in cases {
             let before = failures.count

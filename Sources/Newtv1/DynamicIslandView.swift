@@ -15,7 +15,7 @@ struct DynamicIslandView: View {
     private var activities: [NotchSection] { controller.islandActivities }
     private var radius: Double { controller.expanded ? config.cornerRadius : 24 }
     private var surface: NotchConfiguration { var copy = config; copy.cornerRadius = radius; return copy }
-    private var signal: NewtSignalState { model.error != nil ? .attention : model.busy || model.speechStarting ? .working : speech.isListening || speaker.speaking ? .listening : .idle }
+    private var signal: NewtSignalState { model.error != nil ? .attention : model.busy || model.speechStarting || speech.isTranscribing ? .working : speech.isListening || speaker.speaking ? .listening : .idle }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,12 +107,12 @@ struct DynamicIslandView: View {
         switch section {
         case .voice:
             VStack(alignment: .leading, spacing: 10) {
-                Text(model.error != nil ? "A little help needed." : model.busy ? "On it." : speech.isListening ? "I'm listening." : speaker.speaking ? "Here's what I found." : "What can I do for you?")
+                Text(model.error != nil ? "A little help needed." : model.busy ? "On it." : speech.isTranscribing ? "Got it." : speech.isListening ? "I'm listening." : speaker.speaking ? "Here's what I found." : "What can I do for you?")
                     .font(.system(size: 25, weight: .semibold, design: .rounded)).tracking(-0.7)
-                Text(model.error ?? (speech.transcript.isEmpty ? "Speak naturally. Newt takes it from here." : speech.transcript))
+                Text(model.error ?? (speech.isTranscribing ? "Microphone off. Preparing your request…" : speech.transcript.isEmpty ? "Speak naturally. Pause for two seconds to send." : speech.transcript))
                     .font(.system(size: 13)).foregroundStyle(model.error != nil ? .orange : .white.opacity(0.5)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if model.error != nil { Button("View details") { model.openCommandCenter(page: model.accessibilityIssue ? .settings : .companion) }.font(.system(size: 11, weight: .medium)).foregroundStyle(tint) }
-                if speech.isListening, config.showWaveform { ListeningRibbon(level: speech.level, tint: tint, animated: config.animations).frame(height: 20) }
+                if speech.isCapturing, config.showWaveform { ListeningRibbon(level: speech.level, tint: tint, animated: config.animations).frame(height: 20) }
             }
         case .media:
             IslandMediaView(media: media, tint: tint)
@@ -134,7 +134,7 @@ struct DynamicIslandView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Button { model.toggleListening() } label: {
-                Label(model.speechStarting ? "Cancel startup" : speech.isListening ? "Stop listening" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
+                Label(model.speechStarting ? "Cancel startup" : speech.isTranscribing ? "Cancel transcription" : speech.isListening ? "Stop listening" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).frame(height: 38)
                     .background(Color.white, in: Capsule())
             }

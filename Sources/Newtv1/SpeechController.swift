@@ -86,6 +86,7 @@ final class SpeechController: ObservableObject {
         isListening = true
         resetUtterance()
         beginSegment()
+        guard isListening else { return }
         monitor = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tick() }
         }
@@ -139,7 +140,7 @@ final class SpeechController: ObservableObject {
                     }
                 })
         } catch { fail("Microphone or voice detection could not start: " + error.localizedDescription); return }
-        status = "Listening · pause for two seconds to send"
+        status = "Listening · pause for \(String(format: "%.1f", silenceDuration)) seconds to send"
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self, self.isListening, self.generation == token else { return }

@@ -80,7 +80,7 @@ struct NotchView: View {
                             ForEach(AssistantMode.allCases) { mode in Button { model.assistantMode = mode } label: { Label(mode.title, systemImage: mode.icon) } }
                         } label: { Label(model.assistantMode.title, systemImage: model.assistantMode.icon).font(.system(size: 10)).foregroundStyle(tint) }.menuStyle(.borderlessButton).fixedSize()
                         Spacer()
-                        Text(model.busy ? "WORKING" : speaker.speaking ? "SPEAKING" : speech.isListening ? "LISTENING" : "READY").font(.system(size: 8, design: .monospaced)).tracking(1).foregroundStyle(tint)
+                        Text(model.busy ? "WORKING" : speaker.speaking ? "SPEAKING" : speech.isTranscribing ? "TRANSCRIBING" : speech.isListening ? "LISTENING" : "READY").font(.system(size: 8, design: .monospaced)).tracking(1).foregroundStyle(tint)
                         Button { model.openCommandCenter(page: .notch) } label: { Image(systemName: "slider.horizontal.3") }.buttonStyle(.plain).help("Customize notch")
                         Button { controller.togglePin() } label: { Image(systemName: controller.pinned ? "pin.fill" : "pin") }.buttonStyle(.plain).foregroundStyle(controller.pinned ? tint : .gray).help("Pin expanded notch")
                     }.padding(.horizontal, 20).padding(.vertical, 12)
@@ -97,7 +97,7 @@ struct NotchView: View {
                     Divider().overlay(tint.opacity(0.12))
                     HStack(spacing: 9) {
                         Button { model.toggleListening() } label: {
-                            Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
+                            Label(model.speechStarting ? "Cancel microphone startup" : speech.isTranscribing ? "Cancel transcription" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
                                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(.black).frame(maxWidth: .infinity).padding(.vertical, 10).background(tint, in: RoundedRectangle(cornerRadius: 9))
                         }.buttonStyle(.plain)
                         Button { model.stop(); speech.stop() } label: { Image(systemName: "stop.circle").font(.system(size: 17)).foregroundStyle(.orange).frame(width: 34, height: 34).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9)) }.buttonStyle(.plain).help("Stop all actions")
@@ -119,7 +119,7 @@ struct NotchView: View {
         .background(NotchSurface(config: config))
         .clipShape(NotchShape(radius: config.cornerRadius, floating: config.style == .floating))
         .overlay(alignment: .bottom) {
-            if config.showWaveform, speech.isListening {
+            if config.showWaveform, speech.isCapturing {
                 ListeningRibbon(level: speech.level, tint: tint, animated: config.animations).padding(.bottom, 2)
             }
         }
@@ -173,7 +173,7 @@ struct NotchView: View {
             }.help("Pin expanded notch")
             Spacer(minLength: 0)
             Button { model.toggleListening() } label: {
-                Label(model.speechStarting ? "Cancel microphone startup" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
+                Label(model.speechStarting ? "Cancel microphone startup" : speech.isTranscribing ? "Cancel transcription" : speech.isListening ? "Stop listening" : model.assistantMode == .dictate ? "Start dictation" : "Start listening", systemImage: speech.isListening ? "stop.fill" : "mic.fill")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.black)
                     .lineLimit(1)
@@ -192,7 +192,7 @@ struct NotchView: View {
             }.help("Open Newt companion")
             if controller.panelWidth > 1000 {
                 Spacer(minLength: 0)
-                Text(model.busy ? "WORKING" : speaker.speaking ? "SPEAKING" : speech.isListening ? "LISTENING" : "READY")
+                Text(model.busy ? "WORKING" : speaker.speaking ? "SPEAKING" : speech.isTranscribing ? "TRANSCRIBING" : speech.isListening ? "LISTENING" : "READY")
                     .font(.system(size: 8, design: .monospaced))
                     .tracking(1.5)
                     .foregroundStyle(tint)
@@ -202,7 +202,7 @@ struct NotchView: View {
     }
 
     private var signalState: NewtSignalState {
-        model.error != nil ? .attention : model.busy || model.speechStarting ? .working : speech.isListening || speaker.speaking ? .listening : .idle
+        model.error != nil ? .attention : model.busy || model.speechStarting || speech.isTranscribing ? .working : speech.isListening || speaker.speaking ? .listening : .idle
     }
 
     @ViewBuilder private func wing(_ action: NotchWingAction) -> some View {
@@ -264,7 +264,7 @@ struct NotchModule: View {
         case .media:
             NowPlayingView(media: model.nowPlaying, tint: tint)
         case .voice:
-            Text(model.error != nil ? "Needs your attention" : model.busy ? "Making it happen." : model.assistantMode == .dictate ? "Dictating into \(model.targetName)" : speech.isListening ? "I'm listening." : "Newt, at your side.").font(.system(size: 18, weight: .medium)).tracking(-0.4)
+            Text(model.error != nil ? "Needs your attention" : model.busy ? "Making it happen." : speech.isTranscribing ? "Transcribing your request…" : model.assistantMode == .dictate ? "Dictating into \(model.targetName)" : speech.isListening ? "I'm listening." : "Newt, at your side.").font(.system(size: 18, weight: .medium)).tracking(-0.4)
             Text(model.error ?? (speech.transcript.isEmpty ? model.assistantMode.hint : speech.transcript)).font(.system(size: 11)).foregroundStyle(model.error != nil ? Color.orange : .gray).lineLimit(3)
             if speech.isListening { Text(speech.status).font(.system(size: 10)).foregroundStyle(tint) }
             Button(model.accessibility ? "Target: \(model.targetName)" : "Set up Accessibility") { model.openCommandCenter(page: model.accessibility ? .control : .settings) }.font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(.gray)

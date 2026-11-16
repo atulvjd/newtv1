@@ -43,9 +43,9 @@ struct AgentJob: Identifiable, Codable {
 }
 
 enum AppPage: String, CaseIterable {
-    case companion = "Companion", browser = "Browser", connections = "Connections", diagrams = "Diagrams", utilities = "Utilities", routines = "Routines", control = "Command center", brain = "Brain", jobs = "Tasks", notch = "Notch Studio", workflows = "Workflows", guide = "Command guide", settings = "Settings"
+    case system = "System Controls", companion = "Companion", browser = "Browser", connections = "Connections", diagrams = "Diagrams", utilities = "Utilities", routines = "Routines", control = "Command center", brain = "Brain", jobs = "Tasks", notch = "Notch Studio", workflows = "Workflows", guide = "Command guide", settings = "Settings"
     var icon: String {
-        switch self { case .diagrams: return "cube.transparent"; case .browser: return "globe"; case .connections: return "point.3.connected.trianglepath.dotted"; case .utilities: return "square.grid.2x2"; case .routines: return "calendar.badge.clock"; case .companion: return "bubble.left.and.bubble.right"; case .control: return "waveform"; case .brain: return "sparkles"; case .jobs: return "checklist"; case .notch: return "rectangle.topthird.inset.filled"; case .workflows: return "square.stack.3d.up"; case .guide: return "command"; case .settings: return "slider.horizontal.3" }
+        switch self { case .system: return "switch.2"; case .diagrams: return "cube.transparent"; case .browser: return "globe"; case .connections: return "point.3.connected.trianglepath.dotted"; case .utilities: return "square.grid.2x2"; case .routines: return "calendar.badge.clock"; case .companion: return "bubble.left.and.bubble.right"; case .control: return "waveform"; case .brain: return "sparkles"; case .jobs: return "checklist"; case .notch: return "rectangle.topthird.inset.filled"; case .workflows: return "square.stack.3d.up"; case .guide: return "command"; case .settings: return "slider.horizontal.3" }
     }
 }
 
@@ -239,6 +239,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.refreshPermissions(); self.monitor.refresh(); self.clipboard.poll(); self.audio.refresh()
+                if let screen = self.capturedScreen, !self.busy, !self.capturingScreen, !ScreenContextPolicy.isFresh(screen.capturedAt) { self.clearScreenContext() }
+                if let end = self.automation.system.awakeUntil, end <= Date() { self.automation.system.endKeepAwake() }
                 self.utilityTicks += 1
                 if self.utilityTicks % 5 == 0 { self.files.refresh(); self.calendar.refresh() }
                 for name in self.routines.tick() { self.notices.add("Routine ready: " + name, detail: "Review its steps in Routines before running."); self.onPreviewNotch?() }
@@ -428,6 +430,7 @@ final class AppModel: ObservableObject {
     }
 
     func processCompanionInput(_ text: String) {
+        if handleScreenRequest(text) { return }
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lower.hasPrefix("browser ") {
             browserTaskInput = String(text.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst(8))
@@ -489,6 +492,7 @@ final class AppModel: ObservableObject {
     func submit(_ command: String? = nil) {
         guard !busy, !capturingScreen, pending == nil else { return }
         let text = command ?? input
+        if handleScreenRequest(text) { return }
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lower.hasPrefix("guide ") { guideQuestion = String(text.dropFirst(6)); captureScreenForReview(); return }
         if lower == "hide guide" { guidanceOverlay.hide(); return }
@@ -649,6 +653,7 @@ final class AppModel: ObservableObject {
             openCommandCenter(page: .settings)
             return
         }
+        if plan.actions.contains(where: { if case .system = $0 { return true }; return false }) { speech.stop() }
         blockedForAccessibility = nil
         let jobID = pendingJobID; pendingJobID = nil; currentJobID = jobID
         if let i = agentJobs.firstIndex(where: { $0.id == jobID }) { agentJobs[i].remaining = plan.actions; agentJobs[i].lastPlan = plan.actions; agentJobs[i].trace.append("Approved run started at " + Date().formatted()) }
@@ -709,6 +714,7 @@ final class AppModel: ObservableObject {
     func stop(pauseAutomaticRoutines: Bool = true) {
         if pauseAutomaticRoutines { automaticRoutinesPaused = true }
         browserAgent.stop()
+        automation.system.endKeepAwake()
         connections.cancel()
         routineProposal = nil; routineProposalItem = nil
         cancelListening()
@@ -777,13 +783,28 @@ final class AppModel: ObservableObject {
         if pending == nil, blockedForAccessibility == nil, currentJobID == nil, pendingJobID != nil { cancelPendingPlan() }
     }
 
-    func captureScreenForReview() {
+    @discardableResult private func handleScreenRequest(_ text: String) -> Bool {
+        guard let request = ScreenRequest.parse(text) else { return false }
+        switch request {
+        case .preview(let question): guideQuestion = question; captureScreenForReview()
+        case .readText: captureScreenForReview(readText: true)
+        case .discard: clearScreenContext()
+        }
+        return true
+    }
+
+    func captureScreenForReview(readText: Bool = false) {
         guard !busy, !capturingScreen, pending == nil else { return }
         speech.stop(); speaker.stop(); guidanceOverlay.hide()
         approvedScreenID = nil; capturedScreen = nil; localScreenText = ""; capturingScreen = true; error = nil
         execution = Task {
             defer { capturingScreen = false; execution = nil }
-            do { let screen = try await ScreenContext.capture(displayChoice: screenDisplayChoice); try Task.checkCancellation(); capturedScreen = screen; openCommandCenter(page: .companion) }
+            do {
+                let screen = try await ScreenContext.capture(displayChoice: screenDisplayChoice)
+                try Task.checkCancellation(); capturedScreen = screen
+                if readText { localScreenText = try await ScreenContext.readText(screen); try Task.checkCancellation() }
+                openCommandCenter(page: .companion)
+            }
             catch { if !(error is CancellationError) { self.error = error.localizedDescription }; openCommandCenter(page: .companion) }
         }
     }
@@ -802,19 +823,21 @@ final class AppModel: ObservableObject {
 
     func askUsingApprovedScreen() {
         guard let screen = capturedScreen, approvedScreenID == screen.id, !busy, !capturingScreen else { error = "Review this screenshot and choose Use this screen first."; return }
+        guard ScreenContextPolicy.isFresh(screen.capturedAt) else { clearScreenContext(); error = "That screen preview expired. Capture a fresh one before sharing."; return }
         guard useOpenAI, keyConfigured else { error = "Connect \(aiProvider.title) in Settings to analyze a screen. Local text extraction does not need an API key."; return }
         let question = guideQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { error = "Ask a question about the screen first."; return }
         guard question.count <= 16000 else { error = "Please keep a request under 16,000 characters."; return }
+        let provider = aiProvider, selectedModel = aiModel
         approvedScreenID = nil; busy = true; error = nil
         execution = Task {
             defer { busy = false; execution = nil; capturedScreen = nil }
             do {
-                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save a \(aiProvider.title) key in Settings first.") }
-                let result = try await OpenAIBrain(provider: aiProvider).guide(question, jpeg: screen.jpeg, model: aiModel, key: key)
+                guard let key = try KeychainStore.load(provider: provider) else { throw Newtv1Failure("Save a \(provider.title) key in Settings first.") }
+                let result = try await OpenAIBrain(provider: provider).guide(question, jpeg: screen.jpeg, model: selectedModel, key: key)
                 try Task.checkCancellation()
                 lastGuidance = result; guideDisplayID = screen.displayID; guideFrame = screen.frame
-                brainAnswers.insert(BrainAnswer(question: question, markdown: result.answer, provider: aiProvider.rawValue), at: 0); brainAnswers = Array(brainAnswers.prefix(30))
+                brainAnswers.insert(BrainAnswer(question: question, markdown: result.answer, provider: provider.rawValue), at: 0); brainAnswers = Array(brainAnswers.prefix(30))
                 saveConversationHistory()
                 if speakAnswers { speakAnswer(result.answer) }
                 openCommandCenter(page: .companion)

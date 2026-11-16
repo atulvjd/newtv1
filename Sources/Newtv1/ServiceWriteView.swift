@@ -17,18 +17,18 @@ struct ServiceWriteView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Action", selection: $kind) { ForEach(ServiceWrite.Kind.allCases) { Text($0.rawValue).tag($0) } }
                 if [.gmailDraft, .gmailSend, .slack, .notion].contains(kind) {
-                    TextField(kind == .slack ? "Exact Slack channel ID" : kind == .notion ? "Exact Notion page UUID" : "Recipient email address", text: $target).textFieldStyle(.roundedBorder)
+                    TextField(kind == .slack ? "Exact Slack channel ID" : kind == .notion ? "Exact Notion page UUID" : "Recipient email address", text: $target).textFieldStyle(WorkspaceFieldStyle())
                 }
-                if [.gmailDraft, .gmailSend, .calendar, .drive].contains(kind) { TextField(kind == .drive ? "Filename" : "Subject / title", text: $title).textFieldStyle(.roundedBorder) }
+                if [.gmailDraft, .gmailSend, .calendar, .drive].contains(kind) { TextField(kind == .drive ? "Filename" : "Subject / title", text: $title).textFieldStyle(WorkspaceFieldStyle()) }
                 TextEditor(text: $content).font(.system(size: 12)).frame(height: 100)
-                if kind == .calendar { DatePicker("Starts", selection: $start); DatePicker("Ends", selection: $end); Text("Creates an event in the connected account's primary calendar, without inviting attendees.").font(.system(size: 11)).foregroundStyle(.gray) }
-                Text("Google writes require reconnecting with the write-permissions switch enabled. Slack needs chat:write and channel membership. Notion needs Insert content on the selected page. This form sends the reviewed content to the named service, without using AI.").font(.system(size: 11)).foregroundStyle(.gray)
+                if kind == .calendar { DatePicker("Starts", selection: $start); DatePicker("Ends", selection: $end); Text("Creates an event in the connected account's primary calendar, without inviting attendees.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary) }
+                Text("Google writes require reconnecting with the write-permissions switch enabled. Slack needs chat:write and channel membership. Notion needs Insert content on the selected page. This form sends the reviewed content to the named service, without using AI.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
                 Button("Review action") {
                     do {
                         let draft = ServiceWrite(kind: kind, target: target, title: title, text: content, start: start, end: end)
                         _ = try draft.request(token: "validation-only"); proposal = draft; message = ""
                     } catch { message = error.localizedDescription }
-                }.buttonStyle(.bordered).disabled(connections.busy)
+                }.buttonStyle(WorkspaceButtonStyle()).disabled(connections.busy)
                 if !message.isEmpty { Text(message).font(.system(size: 12)).foregroundStyle(.orange) }
                 if let proposal {
                     VStack(alignment: .leading, spacing: 10) {
@@ -38,8 +38,8 @@ struct ServiceWriteView: View {
                         Text(proposal.text).font(.system(size: 12)).textSelection(.enabled)
                         if proposal.kind == .calendar { Text(proposal.start.formatted() + " → " + proposal.end.formatted() + " · " + TimeZone.current.identifier).font(.system(size: 12)) }
                         HStack {
-                            Button("Confirm: " + proposal.kind.rawValue) { self.proposal = nil; connections.perform(proposal) }.buttonStyle(.borderedProminent)
-                            Button("Cancel") { self.proposal = nil }.buttonStyle(.bordered)
+                            Button("Confirm: " + proposal.kind.rawValue) { self.proposal = nil; connections.perform(proposal) }.buttonStyle(WorkspaceButtonStyle(primary: true))
+                            Button("Cancel") { self.proposal = nil }.buttonStyle(WorkspaceButtonStyle())
                         }.disabled(connections.busy)
                     }.padding(14).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
                 }

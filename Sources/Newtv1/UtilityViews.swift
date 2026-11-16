@@ -146,59 +146,58 @@ struct RoutinesView: View {
     @UtilityState private var automaticLocal = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Routines, right on time.").font(.system(size: 29, weight: .semibold))
-            Text("Schedules are saved on this Mac. Newtv1 must be open; missed runs coalesce into one occurrence. Runs wait for review unless you explicitly approve supported local actions below.").font(.system(size: 12)).foregroundStyle(.gray)
-            Toggle("Pause automatic local routines", isOn: $model.automaticRoutinesPaused).toggleStyle(.switch)
+            WorkspaceHeading(title: "A rhythm for your day.", subtitle: "Schedule a routine and let Newt keep track. Runs while the app is open, with review unless you approve supported local actions.")
+            Toggle("Pause automatic local routines", isOn: $model.automaticRoutinesPaused).toggleStyle(WorkspaceToggleStyle())
             if model.automaticRoutinesPaused { Text("Automatic runs are paused. Stop All Actions also turns this on.").font(.system(size: 11)).foregroundStyle(.orange) }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Schedule it in your own words").font(.system(size: 17, weight: .medium))
-                TextField("Every Tuesday and Thursday at 5 pm, run focus mode…", text: $scheduleRequest).textFieldStyle(.roundedBorder).onSubmit { model.proposeRoutine(scheduleRequest) }
-                Button("Preview schedule change") { model.proposeRoutine(scheduleRequest) }.buttonStyle(.bordered).disabled(model.busy || scheduleRequest.isEmpty)
+                TextField("Every Tuesday and Thursday at 5 pm, run focus mode…", text: $scheduleRequest).textFieldStyle(WorkspaceFieldStyle()).onSubmit { model.proposeRoutine(scheduleRequest) }
+                Button("Preview schedule change") { model.proposeRoutine(scheduleRequest) }.buttonStyle(WorkspaceButtonStyle()).disabled(model.busy || scheduleRequest.isEmpty)
                 if !model.routineMessage.isEmpty { Text(model.routineMessage).font(.system(size: 12)).textSelection(.enabled) }
                 if let proposal = model.routineProposal, proposal.operation != "question", let item = model.routineProposalItem {
                     Text(proposal.operation.capitalized + ": " + item.name).font(.system(size: 15, weight: .medium))
                     if ["create", "update"].contains(proposal.operation) {
-                        Text(item.nextRun.formatted(date: .complete, time: .shortened) + " · " + TimeZone.current.identifier + " · " + item.repetition.rawValue).font(.system(size: 12)).foregroundStyle(model.notch.tint)
+                        Text(item.nextRun.formatted(date: .complete, time: .shortened) + " · " + TimeZone.current.identifier + " · " + item.repetition.rawValue).font(.system(size: 12)).foregroundStyle(WorkspaceTheme.accent)
                         if let days = item.weekdays, !days.isEmpty { Text(days.map { Calendar.current.weekdaySymbols[$0 - 1] }.joined(separator: ", ")).font(.system(size: 12)) }
                         Text(item.commands).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
                     }
-                    HStack { Button("Save this change") { model.saveRoutineProposal() }.buttonStyle(.borderedProminent).foregroundStyle(.black); Button("Discard") { model.routineProposal = nil; model.routineProposalItem = nil; model.routineMessage = "Discarded. No schedule changed." }.buttonStyle(.bordered) }
+                    HStack { Button("Save this change") { model.saveRoutineProposal() }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black); Button("Discard") { model.routineProposal = nil; model.routineProposalItem = nil; model.routineMessage = "Discarded. No schedule changed." }.buttonStyle(WorkspaceButtonStyle()) }
                 }
-            }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            }.padding(20).workspaceCard()
             ForEach(store.routines) { item in
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { Text(item.name).font(.system(size: 16, weight: .medium)); Spacer(); Toggle("Enabled", isOn: Binding(get: { store.routines.first(where: { $0.id == item.id })?.enabled ?? false }, set: { value in if let i = store.routines.firstIndex(where: { $0.id == item.id }) { store.routines[i].enabled = value; if !value { store.routines[i].awaitingReview = false } } })).fixedSize() }
-                    Text(item.awaitingReview ? "Ready for review" : item.nextRun.formatted() + " · " + item.repetition.rawValue).font(.system(size: 11)).foregroundStyle(model.notch.tint)
-                    if let days = item.weekdays, !days.isEmpty { Text(days.map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: ", ")).font(.system(size: 11)).foregroundStyle(.gray) }
-                    Text(item.commands).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
-                    if item.executionPolicy == .approvedLocal { Text("Approved local actions · changed commands return to review").font(.system(size: 10)).foregroundStyle(model.notch.tint) }
+                    Text(item.awaitingReview ? "Ready for review" : item.nextRun.formatted() + " · " + item.repetition.rawValue).font(.system(size: 11)).foregroundStyle(WorkspaceTheme.accent)
+                    if let days = item.weekdays, !days.isEmpty { Text(days.map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: ", ")).font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary) }
+                    Text(item.commands).font(.system(size: 11, design: .monospaced)).foregroundStyle(WorkspaceTheme.secondary)
+                    if item.executionPolicy == .approvedLocal { Text("Approved local actions · changed commands return to review").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.accent) }
                     HStack {
                         if item.awaitingReview { Button("Review run") { model.reviewRoutine(item) }; Button("Skip occurrence") { store.dismiss(item.id) } }
                         Button("Edit") { editing = item.id; name = item.name; commands = item.commands; date = item.nextRun; repetition = item.repetition; weekdays = Set(item.weekdays ?? []); automaticLocal = item.executionPolicy == .approvedLocal }
                         Button("Delete schedule") { store.routines.removeAll { $0.id == item.id } }
-                    }.buttonStyle(.bordered)
-                }.padding(18).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(WorkspaceButtonStyle())
+                }.padding(18).workspaceCard()
             }
             VStack(alignment: .leading, spacing: 12) {
                 Text(editing == nil ? "New routine" : "Edit routine").font(.system(size: 17, weight: .medium))
-                TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+                TextField("Name", text: $name).textFieldStyle(WorkspaceFieldStyle())
                 TextEditor(text: $commands).font(.system(size: 12, design: .monospaced)).frame(height: 120)
-                Text("One supported command per line. You can use run WORKFLOW NAME.").font(.system(size: 10)).foregroundStyle(.gray)
+                Text("One supported command per line. You can use run WORKFLOW NAME.").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
                 DatePicker("First run", selection: $date)
                 Picker("Repeat", selection: $repetition) { ForEach(ScheduledRoutine.Repetition.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
-                Toggle("Approve these local actions for automatic scheduled runs", isOn: $automaticLocal).toggleStyle(.switch)
-                Text("Supports app launches, window placement, volume/mute and waits. Typing, clicks, shortcuts, web navigation, shell and account changes require review. Re-saving this switch approves the exact expanded commands shown here; changing a workflow returns the run to review.").font(.system(size: 10)).foregroundStyle(.gray)
+                Toggle("Approve these local actions for automatic scheduled runs", isOn: $automaticLocal).toggleStyle(WorkspaceToggleStyle())
+                Text("Supports app launches, window placement, volume/mute and waits. Typing, clicks, shortcuts, web navigation, shell and account changes require review. Re-saving this switch approves the exact expanded commands shown here; changing a workflow returns the run to review.").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
                 if repetition == .weekly {
                     HStack { ForEach(1...7, id: \.self) { day in Toggle(Calendar.current.shortWeekdaySymbols[day - 1], isOn: Binding(get: { weekdays.contains(day) }, set: { if $0 { weekdays.insert(day) } else { weekdays.remove(day) } })).toggleStyle(.button) } }
-                    Text("Leave days empty to repeat on the first run's weekday.").font(.system(size: 10)).foregroundStyle(.gray)
+                    Text("Leave days empty to repeat on the first run's weekday.").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
                 }
                 HStack {
-                    Button("Save routine") { save() }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                    Button("Save routine") { save() }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black)
                     if editing != nil { Button("Cancel edit") { editing = nil; name = ""; commands = "" } }
                     Menu("Use workflow") { ForEach(model.workflows) { workflow in Button(workflow.name) { name = workflow.name; commands = "run " + workflow.name } } }
                 }
                 if !message.isEmpty { Text(message).font(.system(size: 11)).foregroundStyle(.orange) }
-            }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            }.padding(20).workspaceCard()
         }
     }
     private func save() {
@@ -223,21 +222,22 @@ struct UtilitiesView: View {
     @UtilityState private var snippetText = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Your everyday tools.").font(.system(size: 29, weight: .semibold))
-            Text("Modules also live in the notch. Connect only the sources you want.").font(.system(size: 12)).foregroundStyle(.gray)
-            utilityCard("Audio output", icon: "speaker.wave.2") { AudioModule(audio: model.audio) }
-            utilityCard("Calendar", icon: "calendar") { CalendarModule(calendar: model.calendar) }
-            utilityCard("Downloads", icon: "arrow.down.circle") { DownloadsModule(files: model.files) }
-            utilityCard("File shelf", icon: "tray") { FileShelfModule(files: model.files) }
-            utilityCard("System monitor", icon: "gauge.with.dots.needle.50percent") { SystemModule(monitor: model.monitor) }
-            utilityCard("Camera mirror", icon: "camera") { CameraModule(camera: model.camera) }
-            utilityCard("Clipboard", icon: "doc.on.clipboard") { ClipboardModule(clipboard: model.clipboard) }
+            WorkspaceHeading(title: "The little things, together.", subtitle: "Everyday tools, close at hand. You can find these in your notch, too.")
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 18, alignment: .top)], alignment: .leading, spacing: 18) {
+                utilityCard("Audio output", icon: "speaker.wave.2") { AudioModule(audio: model.audio) }
+                utilityCard("Calendar", icon: "calendar") { CalendarModule(calendar: model.calendar) }
+                utilityCard("Downloads", icon: "arrow.down.circle") { DownloadsModule(files: model.files) }
+                utilityCard("File shelf", icon: "tray") { FileShelfModule(files: model.files) }
+                utilityCard("System monitor", icon: "gauge.with.dots.needle.50percent") { SystemModule(monitor: model.monitor) }
+                utilityCard("Camera mirror", icon: "camera") { CameraModule(camera: model.camera) }
+                utilityCard("Clipboard", icon: "doc.on.clipboard") { ClipboardModule(clipboard: model.clipboard) }
+                utilityCard("Newt inbox", icon: "bell") { InboxModule(notices: model.notices) }
+            }
             SnippetsView(clipboard: model.clipboard)
-            utilityCard("Newt inbox", icon: "bell") { InboxModule(notices: model.notices) }
         }
     }
     private func utilityCard<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) { Label(title, systemImage: icon).font(.system(size: 17, weight: .medium)); content() }.padding(20).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        VStack(alignment: .leading, spacing: 14) { Label(title, systemImage: icon).font(.system(size: 15, weight: .medium)).foregroundStyle(WorkspaceTheme.text); content() }.padding(22).frame(maxWidth: .infinity, minHeight: 166, alignment: .topLeading).workspaceCard()
     }
 }
 struct SnippetsView: View {
@@ -251,9 +251,9 @@ struct SnippetsView: View {
             ForEach(clipboard.snippets) { snippet in
                 HStack { Button(snippet.name) { clipboard.copyText(expanded(snippet.text)) }.buttonStyle(.plain); Spacer(); Button("Edit") { edit = snippet.id; name = snippet.name; text = snippet.text }; Button("Remove") { clipboard.snippets.removeAll { $0.id == snippet.id } } }.font(.system(size: 12))
             }
-            TextField("Snippet name", text: $name).textFieldStyle(.roundedBorder)
+            TextField("Snippet name", text: $name).textFieldStyle(WorkspaceFieldStyle())
             TextEditor(text: $text).frame(height: 80)
-            Text("Click a saved snippet to copy it. {{date}} and {{time}} expand when copied.").font(.system(size: 10)).foregroundStyle(.gray)
+            Text("Click a saved snippet to copy it. {{date}} and {{time}} expand when copied.").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
             HStack { Button(edit == nil ? "Save snippet" : "Update snippet") {
                 let snippet = ClipboardStore.Snippet(id: edit ?? UUID(), name: String(name.prefix(80)), text: String(text.prefix(16000)))
                 if let i = clipboard.snippets.firstIndex(where: { $0.id == snippet.id }) { clipboard.snippets[i] = snippet } else { clipboard.snippets.append(snippet) }
@@ -261,7 +261,7 @@ struct SnippetsView: View {
             }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || text.isEmpty || (edit == nil && clipboard.snippets.count >= 100))
                 if edit != nil { Button("Cancel") { edit = nil; name = ""; text = "" } }
             }
-        }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        }.padding(20).workspaceCard()
     }
     private func expanded(_ value: String) -> String { value.replacingOccurrences(of: "{{date}}", with: Date().formatted(date: .abbreviated, time: .omitted)).replacingOccurrences(of: "{{time}}", with: Date().formatted(date: .omitted, time: .shortened)) }
 }

@@ -1,4 +1,32 @@
-# Current release: 0.10.0
+# Current release: 0.12.0
+
+Added a System Controls workspace and typed actions for Wi-Fi power, System Events appearance/Dock preferences, exact Core Audio input/output routing, microphone gain/mute, relative output volume, timed IOKit keep-awake sessions, display sleep, brightness/media key dispatch, settings shortcuts and quarter-window positioning. Direct commands, workflows, AI planner descriptions, recovery encoding and permission/review flags share these action types. Wi-Fi-off and display sleep retain explicit review; scheduled automatic execution excludes the new system actions. State-reading operations confirm available native changes; brightness/media key dispatch is reported without claiming a verified player/display outcome.
+
+Added a shared screen-access panel with permission status, display selection, local preview, local OCR and explicit one-request AI sharing. Voice/text aliases capture fresh screen context. Previews expire after two minutes; the chosen provider/model are fixed for an approved analysis request. Apple Vision OCR uses automatic language detection and bounded input/output. macOS Screen Recording and relevant Mac control/Automation grants remain prerequisites; no permission bypass or continuous background screen stream is implemented.
+
+Validation: release build and signature verification passed, with 55 groups / 847 assertions including synthetic-image OCR and an image-bytes/JSON round trip through the signed screen-reader helper. Native checks enumerated 3 input and 2 output audio devices, validated default identities and levels, and created/released a timed IOKit assertion. These checks did not open audio input or change Wi-Fi, levels, playback or appearance. The System Controls page was inspected in the app, including real device selectors. Live screenshot capture succeeded after refreshing the existing Screen Recording grant. OCR runs on CPU in a separate helper with private pipes, bounded output, cancellation and a 30-second deadline. A cold local read reached that deadline without closing the app; a subsequent fresh capture and OCR completed successfully. Existing Screen Recording and Mac control grants were refreshed for the final app copy after macOS authentication. The app reported both grants connected, live text extraction was verified without quoting the screen text, and the test preview was discarded. No screenshot was sent to an AI provider during these checks.
+
+---
+
+# Release: 0.11.0
+
+Redesigned the macOS workspace with a shared charcoal-and-mint palette, consistent card surfaces, readable typography, shared button and field styles, aligned switches, and focus indicators. Navigation is grouped and searchable, with Settings and the Command library pinned below the page list. The companion screen has compact mode selection, a focused composer and draft suggestions. Utilities and the command library use adaptive grids. Task conversations and browser extension setup use disclosure panels. Settings is split into Voice, AI, Access, Privacy and Advanced; existing credentials and settings are preserved. The notch keeps its saved appearance and behavior.
+
+Validation: release build, signature verification, 51 core groups / 694 assertions, and browser DOM regressions passed. Native UI inspection covered the companion, Voice settings, utilities grid, browser task controls, Notch Studio and workflow editor. Workspace page search was tested, and a draft workflow dialog was opened and cancelled without saving. Provider sign-in, live account writes and new microphone capture were not part of this UI-only verification.
+
+---
+
+# Release: 0.10.1
+
+Fixed command endpointing in both Apple recognition and cloud recording. The default is two seconds without detected speech, with a one-time migration to single-request listening. An on-device SoundAnalysis speech/whisper classifier replaces volume-only endpointing in the live capture paths. Late transcription callbacks cannot extend silence; missing audio cannot leave a stale speaking flag latched. The microphone closes before provider transcription and request dispatch. The UI distinguishes listening from transcription and allows cancellation during processing. Cloud capture keeps one uninterrupted microphone stream and rotates only bounded mono 16 kHz WAV files.
+
+Validation: 51 core groups / 694 assertions passed, plus browser DOM regressions. Offline synthesized speech with steady fan-like noise ended 2.18 seconds after the spoken audio; 70 classification windows were checked. A 32-second stereo 48 kHz fixture verified conversion, recording rotation, file size limits, private file permissions and rejection of steady hum. These fixtures use no microphone, API credentials or network. Real-world detection accuracy still depends on the microphone and surroundings; provider processing starts after capture ends.
+
+Run `bash scripts/check-speech-audio.sh` on macOS to repeat the offline audio fixtures with an installed system voice. This synthesizes speech to a temporary file without playing it or opening the microphone.
+
+---
+
+# Release: 0.10.0
 
 The default notch is now a focused Dynamic Island: compact pill, one expanded activity at a time, up to two compact live activity indicators, automatic activity priority, countdown/media treatments, activity menu, press-and-hold/hover expansion, Escape/upward-drag/outside-click dismissal, and pinning. The expanded panel stays 440 points wide (subject to camera and screen clearance) and sizes to selected content. Classic horizontal and vertical layouts remain optional. Studio has a matching preview.
 

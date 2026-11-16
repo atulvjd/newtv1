@@ -2,9 +2,40 @@
 
 A native macOS voice control app built with SwiftUI, Speech, Accessibility, and Quartz. No JavaScript runtime, cloud account, or API key required for the built-in commands.
 
+## Workspace
+
+Version 0.11 brings a consistent charcoal-and-mint workspace, clearer typography, shared buttons and focused text fields, grouped navigation with page search, and pinned Settings and Command library controls. **Newt** is the main voice and text workspace, with compact mode selection and suggestions that fill a draft. Utilities use an adaptive card grid; task conversations and advanced browser setup expand when needed. Notch Studio retains your chosen notch colors and live preview.
+
+**Settings** is split into **Voice**, **AI**, **Access**, **Privacy**, and **Advanced**. Conversation memory is under Privacy; pause duration, language, playback, and wake phrases are under Voice. Page and settings-tab changes return the content to the top. Workflow and command-review dialogs share the same visual style. This release preserves saved workflows, provider credentials, permission requirements, and the two-second speech endpoint.
+
+## System Controls
+
+Open **System Controls** in the sidebar. Its native controls and direct voice commands use the same typed actions, work in workflows, and appear in reviewed AI plans.
+
+| Control | Example commands |
+| --- | --- |
+| Appearance and Dock | `dark mode`, `light mode`, `toggle appearance`, `hide dock`, `show dock` |
+| Wi-Fi power | `wifi on`, `wifi off` |
+| Audio routing | `audio output MacBook Pro Speakers`, `audio input USB Microphone` |
+| Levels and microphone | `volume up`, `volume down five percent`, `microphone volume fifty`, `mute microphone`, `unmute microphone` |
+| Display and playback | `brightness up`, `brightness down three steps`, `sleep display`, `play pause`, `next track`, `previous track` |
+| Timed keep-awake | `keep awake for thirty minutes`, `allow sleep` |
+| Window quarters | `top left quarter`, `top right quarter`, `bottom left quarter`, `bottom right quarter` |
+| Settings shortcuts | `open displays settings`, `open sound settings`, `open wifi settings`, `open bluetooth settings` |
+
+Wi-Fi off and display sleep require review. Device names must match exactly and uniquely; the device picker uses stable IDs. Microphone mute uses hardware mute when available, otherwise zero input gain with an in-memory restore level. A device can reject gain or mute changes; the app reports that limitation. Use the microphone button to unmute when Newt cannot hear you. Brightness keys require a compatible display, media keys target macOS’s active player, and both need Mac control permission. Their actual effects need inspection. Appearance and Dock changes use System Events Automation permission. Opening Bluetooth settings does not toggle Bluetooth.
+
+Keep-awake sessions last 1–180 minutes and prevent idle system sleep, while display sleep, manual sleep, lid closure and system power policies still apply. Timeout, Stop All, or quitting releases Newtv1’s assertion. These new system actions remain review-only for scheduled routines. Quarter-window commands use the display’s available frame, with existing verification reporting when an app enforces a larger minimum size. No new command runs an arbitrary shell script.
+
+### Screen access
+
+**System Controls → What’s on your screen** shows Screen Recording permission, display selection, a local preview and local text extraction. `read my screen` captures a fresh image and reads text locally. `what is on my screen` opens a preview and a question draft. `ask about my screen Where is Save?` fills a question about a fresh preview. `discard screen` removes the current preview and local text.
+
+Screen Recording is a macOS grant and must be enabled for the current app copy. Captures exclude Newtv1’s own windows, remain in memory, and expire after two minutes. Local OCR uses Apple Vision with automatic language detection and bounded image/text sizes. It runs in a separate CPU reader process with private pipes and a 30-second deadline so a recognition failure cannot terminate the workspace. Click **Share once with PROVIDER** to send the displayed screenshot and question for a visual answer. That approval is consumed once; provider and model are fixed for the request. Screen contents are treated as untrusted data by the visual guide. No background screen stream or automatic screenshot upload is enabled.
+
 ## Companion modes
 
-Open **Companion** from the sidebar or notch window button. Its mode cards and the notch's mode menu share the same selection:
+Open **Newt** from the sidebar or notch window button. Its mode selector and the notch's mode menu share the same selection:
 
 | Mode | Behavior |
 | --- | --- |
@@ -14,13 +45,13 @@ Open **Companion** from the sidebar or notch window button. Its mode cards and t
 | Dictate | Insert recognized speech into the last active app's focused field |
 | Agent | Translate a task into a reviewed plan and show execution in Tasks |
 
-**Settings → Companion & voice** has recognition language, vocabulary, push-to-talk, installed Mac voices, playback speed, and local-memory controls. Hold-to-talk uses Option–Space and sends on release without a wake phrase. The normal listening button captures one request and automatically stops after you finish. Settings includes a 0.6–3 second pause control, with 1.4 seconds as the default. Enable Keep listening for more requests for continuous wake-phrase operation. Continuous Dictate inserts text after each pause; say “Newt, stop dictation” (or your custom phrase) to end it. Switch to the destination field before starting.
+**Settings → Voice** has recognition language, vocabulary, push-to-talk, installed Mac voices, and playback speed. Local memory is under **Settings → Privacy**. The normal listening button captures one request: speak naturally, then pause for **two seconds**. Newt closes the microphone, finalizes transcription, and submits the request. Apple SoundAnalysis detects speech locally in both Apple and cloud recording modes; steady noise does not keep the acoustic timer running, and late transcript updates do not restart it. The notch shows transcription separately from active microphone capture. Cloud transcription adds provider processing time after the microphone stops. Settings includes a 0.6–3 second pause control, with 2 seconds as the default. Version 0.10.1 resets the pause to 2 seconds and turns off continuous listening and hold-to-talk once on upgrade. You can change these again afterward. Hold-to-talk uses Option–Space and sends on release without a wake phrase. Enable Keep listening for more requests for continuous wake-phrase operation. Continuous Dictate inserts text after each pause; say “Newt, stop dictation” (or your custom phrase) to end it. Switch to the destination field before starting.
 
 Spoken replies are opt-in. Recognition pauses during playback and resumes only if it was already listening. Starting to talk interrupts playback. Languages and on-device availability depend on Apple; network recognition remains separately opt-in. This is not a streaming audio-to-audio service.
 
 ### Screen context and guidance
 
-Manual capture requires macOS 14+ and Screen Recording permission. Choose a display and **Capture preview**. Newtv1 excludes its own windows. The image stays in memory until you choose **Use this screen** and **Ask about screen**. That approval is consumed by one request. The image is dropped after completion or failure. **Read text locally** uses Apple Vision without an API request.
+Manual capture requires macOS 14+ and Screen Recording permission. Choose a display and **Capture preview**, review it, then use **Share once with PROVIDER** for a visual answer. Newtv1 excludes its own windows. Previews stay in memory for up to two minutes and are dropped after an analysis request. **Read screen text locally** uses Apple Vision without an API request.
 
 Guide answers can include up to eight validated rectangles. **Show highlights** draws numbered, click-through marks for 15 seconds. They do not click or type. Capture again when the layout changes. **Hide highlights**, `Newt, hide guide`, switching target apps, and Stop remove the marks.
 
@@ -80,6 +111,16 @@ To build a faster development bundle:
 ```sh
 bash scripts/build-app.sh debug
 ```
+
+### DMG installer
+
+```sh
+bash scripts/build-dmg.sh
+```
+
+This builds the release app and creates `dist/Newtv1-VERSION-ARCH.dmg` with a SHA-256 checksum beside it. Use `bash scripts/build-dmg.sh --skip-build` to package an existing verified `dist/Newtv1.app` without rebuilding or changing its signature. The image includes the app, an Applications shortcut, installation instructions, and optional browser integration files. The packager verifies the disk-image checksum, mounts it read-only, checks the bundled app signature and file contents, then ejects it.
+
+Open the DMG and drag **Newtv1.app** to **Applications**. Copy optional browser integration files to a permanent location before loading the extension; setup instructions are included under Extras. Keys, credentials, conversations, and personal preferences are not packaged. The current `Newtv1-0.12.0-arm64.dmg` is an Apple Silicon development build, not Apple-notarized. The packaging script uses the architecture and version of the supplied app; public releases still require Developer ID signing and notarization.
 
 ## First run
 

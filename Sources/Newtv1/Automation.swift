@@ -87,6 +87,7 @@ final class Automation {
     private var numberedPID: pid_t?
     private var overlays: [NSPanel] = []
     let runner = ProcessRunner()
+    let system = SystemControls()
     private let applicationCatalog = ApplicationCatalog()
     private var openedApplication: NSRunningApplication?
     private var quittingApplication: NSRunningApplication?
@@ -263,6 +264,7 @@ final class Automation {
             return output.isEmpty ? "Shell command completed." : output
         case .wait(let seconds): try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         case .workflow: throw Newtv1Failure("Workflow was not expanded.")
+        case .system(let command): return try await system.perform(command, runner: runner)
         }
         return action.summary
     }
@@ -286,6 +288,7 @@ final class Automation {
 
     func verify(_ action: Action) throws -> String {
         switch action {
+        case .system(let command): return try system.verification(command)
         case .openApp:
             guard let app = openedApplication, !app.isTerminated else {
                 throw Newtv1Failure("The requested app is no longer running.")
@@ -417,15 +420,7 @@ final class Automation {
         let cocoaCenter = CGPoint(x: current.midX, y: top - current.midY)
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(cocoaCenter) }) ?? NSScreen.main else { throw Newtv1Failure("No display found.") }
         let bounds = screen.visibleFrame
-        var rect = bounds
-        switch position {
-        case "left": rect.size.width /= 2
-        case "right": rect.size.width /= 2; rect.origin.x += rect.width
-        case "top": rect.size.height /= 2; rect.origin.y += rect.height
-        case "bottom": rect.size.height /= 2
-        case "center": rect.size = CGSize(width: min(current.width, bounds.width), height: min(current.height, bounds.height)); rect.origin = CGPoint(x: bounds.midX - rect.width / 2, y: bounds.midY - rect.height / 2)
-        default: break
-        }
+        guard let rect = WindowPlacement.frame(position, visible: bounds, currentSize: current.size) else { throw Newtv1Failure("Unsupported window placement.") }
         var point = CGPoint(x: rect.minX, y: top - rect.maxY); var size = rect.size
         guard let p = AXValueCreate(.cgPoint, &point), let s = AXValueCreate(.cgSize, &size) else { throw Newtv1Failure("Cannot calculate window bounds.") }
         let moved = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, p)

@@ -3,16 +3,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 extension_id="${1:-}"
 browser_scope="${2:-all}"
+requested_app="${3:-${NEWTV1_APP_PATH:-}}"
 case "$browser_scope" in all|brave|chrome|edge|arc|vivaldi|chromium) ;; *) echo "Choose all, brave, chrome, edge, arc, vivaldi, or chromium." >&2; exit 1 ;; esac
 if [[ ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
-    echo "Usage: bash scripts/install-browser-host.sh EXTENSION_ID" >&2
+    echo "Usage: bash scripts/install-browser-host.sh EXTENSION_ID [BROWSER] [APP_PATH]" >&2
     echo "Load browser-extension unpacked in your Chromium browser, then copy its extension ID." >&2
     exit 1
 fi
-app_path="$PWD/dist/Newtv1.app"
+if [[ -n "$requested_app" ]]; then
+    app_path="$requested_app"
+elif [[ -d "$PWD/dist/Newtv1.app" ]]; then
+    app_path="$PWD/dist/Newtv1.app"
+elif [[ -d "/Applications/Newtv1.app" ]]; then
+    app_path="/Applications/Newtv1.app"
+else
+    app_path="$HOME/Applications/Newtv1.app"
+fi
 host_path="$app_path/Contents/MacOS/Newtv1BrowserHost"
 if [[ ! -x "$host_path" ]]; then
-    echo "Build Newtv1 first: bash scripts/build-app.sh" >&2
+    echo "Newtv1BrowserHost was not found in: $app_path" >&2
+    echo "Install Newtv1.app first, or supply its path as the third argument." >&2
     exit 1
 fi
 # User-run installation, scoped to this extension's exact origin.

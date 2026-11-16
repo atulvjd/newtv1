@@ -30,7 +30,6 @@ final class CloudSpeechRecorder {
         self.hold = hold
         running = true
         generation = UUID()
-        endpoint = SpeechEndpoint(silenceDuration: silenceDuration, now: now)
         try recordSegment()
     }
 
@@ -59,7 +58,7 @@ final class CloudSpeechRecorder {
         recording = true
         lastAudioSample = now
         onTranscribing?(false)
-        onStatus?("Listening · pause for two seconds to send")
+        onStatus?("Listening · pause for \(String(format: "%.1f", silenceDuration)) seconds to send")
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tick() }
         }

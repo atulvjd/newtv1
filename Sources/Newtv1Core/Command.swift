@@ -6,10 +6,12 @@ public enum Action: Equatable, Sendable, Codable {
     case showNumbers, hideNumbers, scroll(String, Int), window(String)
     case volume(Int), mute(Bool), screenshot, lock, sleep
     case reveal(String), shell(String), workflow(String), wait(Double)
+    case system(SystemCommand)
 
     public var needsConfirmation: Bool {
         switch self {
         case .quitApp, .shell, .lock, .sleep: return true
+        case .system(let command): return command.needsConfirmation
         default: return false
         }
     }
@@ -17,6 +19,7 @@ public enum Action: Equatable, Sendable, Codable {
     public var requiresAccessibility: Bool {
         switch self {
         case .typeText, .shortcut, .click, .clickNumber, .showNumbers, .scroll, .window, .lock: return true
+        case .system(let command): return command.requiresAccessibility
         default: return false
         }
     }
@@ -44,6 +47,7 @@ public enum Action: Equatable, Sendable, Codable {
         case .shell(let command): return "Run shell: \(command)"
         case .workflow(let name): return "Run workflow “\(name)”"
         case .wait(let seconds): return "Wait \(seconds) seconds"
+        case .system(let command): return command.summary
         }
     }
 }
@@ -116,6 +120,13 @@ public struct CommandParser {
         case "right half", "window right", "move window right": return .window("right")
         case "top half", "window top": return .window("top")
         case "bottom half", "window bottom": return .window("bottom")
+        case "top left quarter", "top left corner": return .window("topLeft")
+        case "top right quarter", "top right corner": return .window("topRight")
+        case "bottom left quarter", "bottom left corner": return .window("bottomLeft")
+        case "bottom right quarter", "bottom right corner": return .window("bottomRight")
+        case "show desktop": return .shortcut("command f3")
+        case "mission control": return .shortcut("control up")
+        case "app windows": return .shortcut("control down")
         case "copy": return .shortcut("command c")
         case "paste": return .shortcut("command v")
         case "undo": return .shortcut("command z")
@@ -131,6 +142,7 @@ public struct CommandParser {
         case "escape": return .shortcut("escape")
         default: break
         }
+        if let command = try SystemCommand.parse(text) { return .system(command) }
         for prefix in ["type ", "write ", "dictate "] {
             if let value = argument(prefix) { return .typeText(value) }
         }

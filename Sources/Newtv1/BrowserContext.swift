@@ -38,31 +38,31 @@ struct BrowserContextView: View {
     @BrowserViewState private var question = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Bring your browser along.").font(.system(size: 29, weight: .semibold))
-            Text("Preview a page for a question, or connect one tab for a browser task. Inspect the shared context and review each proposed action.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(4)
+            WorkspaceHeading(title: "A helping hand in your browser.", subtitle: "Connect a tab for a task, or bring a page into the conversation. You choose what to share.")
             BrowserAgentView(model: model, agent: model.browserAgent)
-            HStack { Button("Load browser preview") { browser.load() }; Button("Clear preview") { browser.clear() } }.buttonStyle(.bordered)
-            Text(browser.message).font(.system(size: 12)).foregroundStyle(.gray)
+            HStack { Button("Load browser preview") { browser.load() }; Button("Clear preview") { browser.clear() } }.buttonStyle(WorkspaceButtonStyle())
+            Text(browser.message).font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary)
             if let page = browser.page {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(page.title).font(.system(size: 20, weight: .medium))
-                    Text(page.url).font(.system(size: 11)).foregroundStyle(model.notch.tint).textSelection(.enabled)
-                    Text("Captured \(page.capturedAt.formatted()) · expires after 15 minutes").font(.system(size: 10)).foregroundStyle(.gray)
+                    Text(page.url).font(.system(size: 11)).foregroundStyle(WorkspaceTheme.accent).textSelection(.enabled)
+                    Text("Captured \(page.capturedAt.formatted()) · expires after 15 minutes").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
                     ScrollView { Text(page.text).font(.system(size: 11)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 240)
-                    Toggle("Use this preview for one \(model.aiProvider.title) request", isOn: $browser.approved).toggleStyle(.switch)
-                    TextField("Ask about this page…", text: $question).textFieldStyle(.roundedBorder)
+                    Toggle("Use this preview for one \(model.aiProvider.title) request", isOn: $browser.approved).toggleStyle(WorkspaceToggleStyle())
+                    TextField("Ask about this page…", text: $question).textFieldStyle(WorkspaceFieldStyle())
                     Button("Ask Newt") {
                         do { let page = try browser.consume(); model.requestBrain(question, mode: .answer, browserPage: page) }
                         catch { browser.message = error.localizedDescription }
-                    }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(!browser.approved || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.capturingScreen || model.pending != nil)
-                }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black).disabled(!browser.approved || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.capturingScreen || model.pending != nil)
+                }.padding(20).workspaceCard()
             }
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Connect your Chromium browser").font(.system(size: 17, weight: .medium))
-                Text("1. Open your browser’s Extensions page and choose Load unpacked. Select this project’s browser-extension folder.\n2. Copy the extension ID.\n3. Run the host installer below with that ID.\n4. Click the extension on a page, inspect the preview, and choose Save preview to Newtv1.").font(.system(size: 12)).foregroundStyle(.gray).lineSpacing(5)
+            DisclosureGroup("Browser extension setup") {
+                VStack(alignment: .leading, spacing: 12) {
+                Text("1. Open your browser’s Extensions page and choose Load unpacked. Select this project’s browser-extension folder.\n2. Copy the extension ID.\n3. Run the host installer below with that ID.\n4. Click the extension on a page, inspect the preview, and choose Save preview to Newtv1.").font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary).lineSpacing(5)
                 Text("bash scripts/install-browser-host.sh EXTENSION_ID").font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-                Text("Supports Chromium browsers with native messaging. Requires this locally built app to stay at its installed path. No account cookies, form values, or browser passwords are requested.").font(.system(size: 11)).foregroundStyle(.gray)
-            }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                Text("Supports Chromium browsers with native messaging. Requires this locally built app to stay at its installed path. No account cookies, form values, or browser passwords are requested.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
+                }.padding(.top, 12)
+            }.padding(20).workspaceCard()
         }
     }
 }

@@ -195,34 +195,33 @@ struct ConnectionsView: View {
     @ConnectionState private var allowGoogleWrites = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Your tools, connected.").font(.system(size: 29, weight: .semibold))
-            Text("Read Gmail, Drive, Calendar, Slack, and Notion, or review an explicit service action below. Credentials stay in Keychain. Content is sent to AI only when you approve a question.").font(.system(size: 12)).foregroundStyle(.gray)
-            if connections.source.account == "google" { Toggle("Request Google write permissions when connecting", isOn: $allowGoogleWrites).toggleStyle(.switch).font(.system(size: 12)) }
+            WorkspaceHeading(title: "Everything, a little closer.", subtitle: "Bring Gmail, Drive, Calendar, Slack, and Notion together. Credentials stay in Keychain; sharing content with AI needs your approval.")
+            if connections.source.account == "google" { Toggle("Request Google write permissions when connecting", isOn: $allowGoogleWrites).toggleStyle(WorkspaceToggleStyle()).font(.system(size: 12)) }
             Picker("Source", selection: $connections.source) { ForEach(Connections.Source.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).disabled(connections.busy)
             HStack {
                 if connections.source.account == "google" { Button("Connect Google…") { connections.connectGoogle(allowWrites: allowGoogleWrites) }.disabled(connections.busy) }
-                else { SecureField(connections.source == .slack ? "Slack read-scope token" : "Notion integration token", text: $token).textFieldStyle(.roundedBorder); Button("Save credential") { connections.connectToken(token, account: connections.source.account); token = "" }.disabled(token.isEmpty || connections.busy) }
+                else { SecureField(connections.source == .slack ? "Slack read-scope token" : "Notion integration token", text: $token).textFieldStyle(WorkspaceFieldStyle()); Button("Save credential") { connections.connectToken(token, account: connections.source.account); token = "" }.disabled(token.isEmpty || connections.busy) }
                 Button("Refresh") { connections.refresh() }.disabled(connections.busy)
                 if connections.connected.contains(connections.source.account) { Button("Disconnect") { connections.disconnect(connections.source.account) } }
                 if connections.busy { ProgressView().controlSize(.small); Button("Cancel") { connections.cancel() } }
-            }.buttonStyle(.bordered)
-            Text(connections.message).font(.system(size: 12)).foregroundStyle(.gray)
-            ServiceWriteView(connections: connections)
+            }.buttonStyle(WorkspaceButtonStyle())
+            Text(connections.message).font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary)
+            ServiceWriteView(connections: connections).padding(20).workspaceCard()
             ForEach(connections.items) { item in
-                Button { connections.read(item) } label: { HStack { VStack(alignment: .leading, spacing: 5) { Text(item.title).font(.system(size: 13, weight: .medium)); Text(item.subtitle).font(.system(size: 10)).foregroundStyle(.gray) }; Spacer(); Image(systemName: "doc.text.magnifyingglass") }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).disabled(connections.busy)
+                Button { connections.read(item) } label: { HStack { VStack(alignment: .leading, spacing: 5) { Text(item.title).font(.system(size: 13, weight: .medium)); Text(item.subtitle).font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary) }; Spacer(); Image(systemName: "doc.text.magnifyingglass") }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).disabled(connections.busy)
             }
             if let preview = connections.preview {
                 VStack(alignment: .leading, spacing: 12) {
                     Link("Open in service", destination: URL(string: preview.url)!).font(.system(size: 12))
                     Text(preview.title).font(.system(size: 19, weight: .medium))
                     ScrollView { Text(preview.text).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 220)
-                    Toggle("Use this content for one \(model.aiProvider.title) request", isOn: $connections.approved).toggleStyle(.switch)
-                    TextField("Ask about this content…", text: $question).textFieldStyle(.roundedBorder)
-                    Button("Ask Newt") { do { let context = try connections.consume(); model.requestBrain(question, mode: .answer, browserPage: context) } catch { connections.message = error.localizedDescription } }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(!connections.approved || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.pending != nil || model.capturingScreen)
-                }.padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                    Toggle("Use this content for one \(model.aiProvider.title) request", isOn: $connections.approved).toggleStyle(WorkspaceToggleStyle())
+                    TextField("Ask about this content…", text: $question).textFieldStyle(WorkspaceFieldStyle())
+                    Button("Ask Newt") { do { let context = try connections.consume(); model.requestBrain(question, mode: .answer, browserPage: context) } catch { connections.message = error.localizedDescription } }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black).disabled(!connections.approved || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || model.pending != nil || model.capturingScreen)
+                }.padding(20).workspaceCard()
             }
             DisclosureGroup("Connection setup and access") {
-                Text("Google: create a Desktop OAuth client in your Google Cloud project, enable Gmail, Drive and Calendar APIs, and configure its consent screen/test users. Download its client JSON and choose Connect Google. Newtv1 requests read-only scopes for all three sources.\n\nSlack: supply a workspace app token with channels:read and channels:history. Invite the app to channels you want it to read. The viewer lists public channels and loads up to 15 messages; workspace policies/rate limits apply.\n\nNotion: create an internal integration with Read content capability, grant it selected pages, and paste its token. The viewer reads page metadata and top-level blocks.\n\nDisconnect removes the local credential. Revoke provider grants separately in the provider’s settings. Account setup and OAuth verification cannot be completed without your provider accounts.").font(.system(size: 11)).foregroundStyle(.gray).lineSpacing(4)
+                Text("Google: create a Desktop OAuth client in your Google Cloud project, enable Gmail, Drive and Calendar APIs, and configure its consent screen/test users. Download its client JSON and choose Connect Google. Newtv1 requests read-only scopes for all three sources.\n\nSlack: supply a workspace app token with channels:read and channels:history. Invite the app to channels you want it to read. The viewer lists public channels and loads up to 15 messages; workspace policies/rate limits apply.\n\nNotion: create an internal integration with Read content capability, grant it selected pages, and paste its token. The viewer reads page metadata and top-level blocks.\n\nDisconnect removes the local credential. Revoke provider grants separately in the provider’s settings. Account setup and OAuth verification cannot be completed without your provider accounts.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary).lineSpacing(4)
             }
         }.onChange(of: connections.source) { _ in token = ""; question = "" }
     }

@@ -79,6 +79,26 @@
             "target": "Newtv1BrowserHost",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release Newtv1BrowserHost"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Debug Newtv1ScreenReader",
+            "target": "Newtv1ScreenReader",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Newtv1ScreenReader"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:newtv1}",
+            "name": "Release Newtv1ScreenReader",
+            "target": "Newtv1ScreenReader",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Newtv1ScreenReader"
         }
     ]
 }

@@ -14,11 +14,10 @@ struct DiagramStudio: View {
     private var diagram: Diagram { model.diagram }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Make an idea visible.").font(.system(size: 29, weight: .semibold))
-            Text("Explain a topic as connected shapes. Use 2D to inspect the relationships or orbit a 3D scene. Generated explanations can be inaccurate; check them before relying on them.").font(.system(size: 12)).foregroundStyle(.gray)
+            WorkspaceHeading(title: "See the bigger picture.", subtitle: "Turn a topic into connected ideas. Explore in 2D or 3D, and check generated explanations before relying on them.")
             HStack {
-                TextField("For example: explain the water cycle", text: $prompt).textFieldStyle(.roundedBorder)
-                Button("Create diagram") { model.generateDiagram(prompt) }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy)
+                TextField("For example: explain the water cycle", text: $prompt).textFieldStyle(WorkspaceFieldStyle())
+                Button("Create diagram") { model.generateDiagram(prompt) }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black).disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy)
                 if model.busy { Button("Stop") { model.stop() } }
             }
             HStack {
@@ -28,18 +27,18 @@ struct DiagramStudio: View {
                 Button("Example") { model.diagram = .example; reset = UUID() }
                 Button("Import…", action: importDiagram)
                 Button("Export…", action: exportDiagram)
-            }.buttonStyle(.bordered)
+            }.buttonStyle(WorkspaceButtonStyle())
             Text(diagram.title).font(.system(size: 22, weight: .medium))
             if threeD {
                 SceneView(scene: scene(), options: [.allowsCameraControl, .autoenablesDefaultLighting]).id(reset.uuidString + diagram.title + String(diagram.nodes.count)).frame(height: 380).clipShape(RoundedRectangle(cornerRadius: 14))
-                Text("Drag to orbit · scroll to zoom · use the component buttons below for details.").font(.system(size: 10)).foregroundStyle(.gray)
+                Text("Drag to orbit · scroll to zoom · use the component buttons below for details.").font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary)
             } else {
                 GeometryReader { proxy in
                     ZStack {
                         ForEach(Array(diagram.links.enumerated()), id: \.offset) { _, link in
                             if let from = diagram.nodes.first(where: { $0.id == link.from }), let to = diagram.nodes.first(where: { $0.id == link.to }) {
                                 Path { path in path.move(to: point(from, proxy.size)); path.addLine(to: point(to, proxy.size)) }.stroke(.white.opacity(0.28), lineWidth: 2)
-                                Text(link.label).font(.system(size: 10)).foregroundStyle(.gray).padding(4).background(.black.opacity(0.8)).position(x: (point(from, proxy.size).x + point(to, proxy.size).x) / 2, y: (point(from, proxy.size).y + point(to, proxy.size).y) / 2 - 16)
+                                Text(link.label).font(.system(size: 10)).foregroundStyle(WorkspaceTheme.secondary).padding(4).background(.black.opacity(0.8)).position(x: (point(from, proxy.size).x + point(to, proxy.size).x) / 2, y: (point(from, proxy.size).y + point(to, proxy.size).y) / 2 - 16)
                             }
                         }
                         ForEach(diagram.nodes) { node in
@@ -48,9 +47,9 @@ struct DiagramStudio: View {
                     }
                 }.frame(height: 380).background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
             }
-            Text(diagram.explanation).font(.system(size: 13)).foregroundStyle(.gray).lineSpacing(4).textSelection(.enabled)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))]) { ForEach(diagram.nodes) { node in Button(node.label) { selected = node.id }.buttonStyle(.bordered).tint(color(node.color)) } }
-            if let node = diagram.nodes.first(where: { $0.id == selected }) { VStack(alignment: .leading, spacing: 8) { Text(node.label).font(.system(size: 17, weight: .medium)); Text(node.detail).font(.system(size: 12)).foregroundStyle(.gray).textSelection(.enabled) }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)) }
+            Text(diagram.explanation).font(.system(size: 13)).foregroundStyle(WorkspaceTheme.secondary).lineSpacing(4).textSelection(.enabled)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))]) { ForEach(diagram.nodes) { node in Button(node.label) { selected = node.id }.buttonStyle(WorkspaceButtonStyle()).tint(color(node.color)) } }
+            if let node = diagram.nodes.first(where: { $0.id == selected }) { VStack(alignment: .leading, spacing: 8) { Text(node.label).font(.system(size: 17, weight: .medium)); Text(node.detail).font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary).textSelection(.enabled) }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)) }
         }
     }
     private func point(_ node: Diagram.Node, _ size: CGSize) -> CGPoint { CGPoint(x: 65 + (node.x + 4) / 8 * max(1, size.width - 130), y: 45 + (3 - node.y) / 6 * max(1, size.height - 90)) }

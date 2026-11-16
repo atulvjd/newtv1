@@ -1,0 +1,26 @@
+Newtv1 optional browser integration
+
+The Mac app works without this extension. It is needed for Newtv1's connected
+browser tasks and browser page previews.
+
+1. Install Newtv1.app in Applications.
+2. Copy this entire Browser Integration folder from the disk image to a
+   permanent folder, such as:
+   ~/Library/Application Support/Newtv1/BrowserIntegration
+3. In Brave, Chrome, Edge, Arc, Vivaldi or Chromium, open the Extensions page.
+   Enable Developer Mode, choose Load unpacked, and select browser-extension
+   inside the permanent folder. Copy the resulting extension ID.
+4. Register the native host from Terminal, replacing EXTENSION_ID:
+
+   bash "$HOME/Library/Application Support/Newtv1/BrowserIntegration/scripts/install-browser-host.sh" EXTENSION_ID brave "/Applications/Newtv1.app"
+
+   Replace brave with chrome, edge, arc, vivaldi, chromium, or all as needed.
+   The installer copies the signed native helper to a stable location under
+   your Application Support folder and permits only this extension's exact ID.
+   The script needs the macOS Python 3 command-line tools.
+5. Open a page, click the extension and choose Connect this tab. Review its
+   visible context in Newtv1 > Browser before enabling AI sharing for a task.
+
+The browser extension and native host require explicit user installation.
+Mounting this disk image does not install them or grant browser permissions.
+Newtv1 never reads browser passwords or account cookies through this extension.

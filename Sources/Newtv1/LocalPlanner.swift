@@ -28,6 +28,7 @@ final class LocalPlanner: NSObject, URLSessionTaskDelegate {
         top half, bottom half, maximize window, center window, minimize window,
         volume 0-100, mute, unmute, take a screenshot, reveal PATH, lock screen, sleep my mac,
         wait SECONDS (0-30), run WORKFLOW_NAME.
+        Additional system commands: \(SystemCommand.plannerCommands).
         One atomic command per array element. Never output shell commands or invent abilities.
         You cannot see the screen, inspect files, or verify outcomes. Do not invent target numbers.
         Use click LABEL only when the user specifies that label. Do not guess email recipients or send messages.

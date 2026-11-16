@@ -8,7 +8,6 @@ public struct SpeechEndpoint {
     private let startedAt: TimeInterval
     private var previousSample: TimeInterval
     private var noiseFloor: Double = -60
-    private var voicedDuration: TimeInterval = 0
     private var candidateDuration: TimeInterval = 0
     private var lastVoice: TimeInterval?
     private var lastClassification: TimeInterval?
@@ -32,7 +31,6 @@ public struct SpeechEndpoint {
         let voiced = powerDB > threshold - (voiceActive ? 4 : 0)
         if voiced {
             candidateDuration += elapsed
-            voicedDuration += elapsed
             if candidateDuration >= 0.12 {
                 voiceActive = true
                 if !usesSpeechClassification {

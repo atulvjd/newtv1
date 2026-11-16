@@ -8,7 +8,7 @@ if [[ "$configuration" != "release" && "$configuration" != "debug" ]]; then
 fi
 swift build -c "$configuration" --scratch-path .build
 binary_dir="$(swift build -c "$configuration" --scratch-path .build --show-bin-path)"
-"$binary_dir/Newtv1CoreChecks"
+NEWTV1_SCREEN_READER_PATH="$binary_dir/Newtv1ScreenReader" "$binary_dir/Newtv1CoreChecks"
 if command -v node >/dev/null 2>&1; then
     node --check browser-extension/background.js
     node --check browser-extension/driver.js
@@ -27,7 +27,7 @@ fi
 sign_identity="${sign_identity:--}"
 fingerprint_file=".build/app-package-fingerprint"
 package_fingerprint="$(
-    shasum -a 256 "$binary_dir/Newtv1" "$binary_dir/Newtv1BrowserHost" Resources/Info.plist Resources/Newtv1.entitlements scripts/make-icon.swift scripts/build-app.sh
+    shasum -a 256 "$binary_dir/Newtv1" "$binary_dir/Newtv1BrowserHost" "$binary_dir/Newtv1ScreenReader" Resources/Info.plist Resources/Newtv1.entitlements scripts/make-icon.swift scripts/build-app.sh
     printf '%s\n' "$sign_identity"
 )"
 if [[ -f "$fingerprint_file" && -d "$app" ]] && [[ "$(cat "$fingerprint_file")" == "$package_fingerprint" ]] && codesign --verify --deep --strict "$app" 2>/dev/null; then
@@ -40,6 +40,8 @@ cp "$binary_dir/Newtv1" "$app/Contents/MacOS/Newtv1.next"
 mv -f "$app/Contents/MacOS/Newtv1.next" "$app/Contents/MacOS/Newtv1"
 cp "$binary_dir/Newtv1BrowserHost" "$app/Contents/MacOS/Newtv1BrowserHost"
 codesign --force --sign "$sign_identity" "$app/Contents/MacOS/Newtv1BrowserHost"
+cp "$binary_dir/Newtv1ScreenReader" "$app/Contents/MacOS/Newtv1ScreenReader"
+codesign --force --sign "$sign_identity" "$app/Contents/MacOS/Newtv1ScreenReader"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 swift scripts/make-icon.swift "$app/Contents/Resources/Newtv1.icns"
 if [[ "$sign_identity" != "-" ]]; then

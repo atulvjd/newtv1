@@ -199,24 +199,24 @@ struct BrowserAgentView: View {
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Label("Browser tasks", systemImage: "cursorarrow.click.2").font(.system(size: 18, weight: .medium)); Spacer(); Text(agent.connected ? "CONNECTED" : "DISCONNECTED").font(.system(size: 10, design: .monospaced)).foregroundStyle(agent.connected ? model.notch.tint : .gray); Button("Refresh") { agent.refresh() } }
+            HStack { Label("Browser tasks", systemImage: "cursorarrow.click.2").font(.system(size: 18, weight: .medium)); Spacer(); Text(agent.connected ? "CONNECTED" : "DISCONNECTED").font(.system(size: 10, design: .monospaced)).foregroundStyle(agent.connected ? WorkspaceTheme.accent : WorkspaceTheme.secondary); Button("Refresh") { agent.refresh() } }
             if let snapshot = agent.state?.snapshot {
                 Text(snapshot.page.title).font(.system(size: 14, weight: .medium))
-                Text(snapshot.page.url).font(.system(size: 11)).foregroundStyle(.gray).textSelection(.enabled)
+                Text(snapshot.page.url).font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary).textSelection(.enabled)
                 DisclosureGroup("Preview the text and controls shared with AI") {
                     ScrollView { Text(preview(snapshot)).font(.system(size: 11)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 200)
                 }
             }
-            Text("Connect one tab from the extension. Each proposed click or edit has a review below. Newt observes the result before proposing the next step. A new website needs reconnection.").font(.system(size: 12)).foregroundStyle(.gray)
-            Toggle("Share this tab's visible text and control labels with \(model.aiProvider.title) for this task", isOn: $consent).toggleStyle(.switch).font(.system(size: 12))
+            Text("Connect one tab from the extension. Each proposed click or edit has a review below. Newt observes the result before proposing the next step. A new website needs reconnection.").font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary)
+            Toggle("Share this tab's visible text and control labels with \(model.aiProvider.title) for this task", isOn: $consent).toggleStyle(WorkspaceToggleStyle()).font(.system(size: 12))
             Picker("Task continuation", selection: $agent.runPolicy) { ForEach(BrowserRunPolicy.allCases) { Text($0.rawValue).tag($0) } }.disabled(agent.busy)
-            TextField("Describe the browser task…", text: $model.browserTaskInput).textFieldStyle(.roundedBorder)
+            TextField("Describe the browser task…", text: $model.browserTaskInput).textFieldStyle(WorkspaceFieldStyle())
             HStack {
                 Button("Start browser task") { agent.start(prompt, model: model); model.browserTaskInput = "" }.disabled(!consent || !agent.connected || agent.busy || prompt.isEmpty || model.busy)
                 if !agent.goal.isEmpty { Button("Send follow-up") { agent.followUp(prompt, model: model); model.browserTaskInput = "" }.disabled(!consent || agent.busy || agent.pending != nil || prompt.isEmpty); Button("Continue task") { agent.resume(model: model) }.disabled(!consent || agent.busy || agent.pending != nil) }
                 Button("Stop") { agent.stop() }.foregroundStyle(.orange)
-            }.buttonStyle(.bordered)
-            Text(agent.status).font(.system(size: 12)).foregroundStyle(.gray)
+            }.buttonStyle(WorkspaceButtonStyle())
+            Text(agent.status).font(.system(size: 12)).foregroundStyle(WorkspaceTheme.secondary)
             if !agent.goal.isEmpty { Text("Goal: " + agent.goal).font(.system(size: 12)).textSelection(.enabled) }
             if let command = agent.pending, let snapshot = agent.state?.snapshot {
                 VStack(alignment: .leading, spacing: 10) {
@@ -224,16 +224,16 @@ struct BrowserAgentView: View {
                     Text(agent.explanation).font(.system(size: 12)).textSelection(.enabled)
                     Text("Destination: " + snapshot.page.url).font(.system(size: 11)).foregroundStyle(.orange)
                     if command.action.kind == .upload {
-                        Button("Choose file…") { agent.chooseUpload() }.buttonStyle(.bordered)
+                        Button("Choose file…") { agent.chooseUpload() }.buttonStyle(WorkspaceButtonStyle())
                         if !agent.uploadName.isEmpty { Text("File: " + agent.uploadName).font(.system(size: 13, weight: .medium)) }
                         Text("Attaching exposes this file to this website, which may upload immediately. File contents are not sent to the AI provider.").font(.system(size: 11)).foregroundStyle(.orange)
                     }
-                    HStack { Button(command.action.kind == .upload ? "Approve file attachment" : "Approve this action") { agent.approve(model: model) }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(!consent || !agent.connected || (command.action.kind == .upload && agent.uploadName.isEmpty)); Button("Not now") { agent.decline() }.buttonStyle(.bordered) }
-                }.padding(16).background(model.notch.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    HStack { Button(command.action.kind == .upload ? "Approve file attachment" : "Approve this action") { agent.approve(model: model) }.buttonStyle(WorkspaceButtonStyle(primary: true)).foregroundStyle(.black).disabled(!consent || !agent.connected || (command.action.kind == .upload && agent.uploadName.isEmpty)); Button("Not now") { agent.decline() }.buttonStyle(WorkspaceButtonStyle()) }
+                }.padding(16).background(WorkspaceTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             } else if !agent.explanation.isEmpty { Text(agent.explanation).font(.system(size: 12)).textSelection(.enabled) }
             if !agent.log.isEmpty { DisclosureGroup("Task observations") { ForEach(Array(agent.log.enumerated()), id: \.offset) { _, line in Text(line).font(.system(size: 11)).textSelection(.enabled).padding(.vertical, 5) } } }
         }
-        .padding(20).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        .padding(20).workspaceCard()
         .onAppear { agent.refresh() }
         .onReceive(timer) { _ in agent.refresh() }
         .onChange(of: model.aiProvider) { _ in agent.stop(); consent = false }
