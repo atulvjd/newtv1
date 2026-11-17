@@ -341,7 +341,7 @@ struct ContentView: View {
                 Divider().overlay(Color.white.opacity(0.04))
                 permissionRow("Speech recognition", "Turn speech into commands using Apple’s recognizer.", model.speechPermission) { model.openPrivacy("SpeechRecognition") }
                 Divider().overlay(Color.white.opacity(0.04))
-                HStack { VStack(alignment: .leading, spacing: 5) { Text("Screen Recording").font(.system(size: 13, weight: .medium)); Text("Only needed for the screenshot command.").font(.system(size: 11)).foregroundStyle(muted) }; Spacer(); Button("Open settings") { model.openPrivacy("ScreenCapture") }.buttonStyle(WorkspaceButtonStyle()) }.padding(20)
+                HStack { VStack(alignment: .leading, spacing: 5) { Text("Screen Recording").font(.system(size: 13, weight: .medium)); Text("Needed for screen previews, local screen reading, visual guidance, and screenshots.").font(.system(size: 11)).foregroundStyle(muted) }; Spacer(); Button("Open settings") { model.openPrivacy("ScreenCapture") }.buttonStyle(WorkspaceButtonStyle()) }.padding(20)
             }.workspaceCard()
         }
     }
@@ -349,19 +349,22 @@ struct ContentView: View {
     private var aiSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 18) {
-                HStack { Label("AI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
-                Picker("Provider", selection: $model.aiProvider) { ForEach(AIProvider.allCases) { Text($0.title).tag($0) } }.disabled(model.busy || model.capturingScreen)
+                HStack { Label("AI brain", systemImage: "sparkles").font(.system(size: 16, weight: .medium)); Spacer(); Text(model.keyConfigured ? model.aiProvider == .chatGPT ? "ACCOUNT CONNECTED" : "KEY IN KEYCHAIN" : "NOT CONNECTED").font(.system(size: 9, design: .monospaced)).foregroundStyle(model.keyConfigured ? accent : muted) }
+                Picker("Provider", selection: $model.aiProvider) { ForEach(AIProvider.allCases) { Text($0.title).tag($0) } }.disabled(model.busy || model.capturingScreen || model.pending != nil)
                 Toggle("Use \(model.aiProvider.title) for questions and natural-language actions", isOn: $model.useOpenAI).toggleStyle(WorkspaceToggleStyle()).disabled(!model.keyConfigured)
                 Toggle("Allow web search for answers", isOn: $model.allowWebSearch).toggleStyle(WorkspaceToggleStyle())
+                if model.aiProvider != .chatGPT {
                 HStack { Text("Model").font(.system(size: 12)); TextField(model.aiProvider.defaultModel, text: $model.aiModel).textFieldStyle(WorkspaceFieldStyle()) }
                 HStack {
                     SecureField(model.keyConfigured ? "Replace API key…" : model.aiProvider.title + " API key…", text: $apiKey).textFieldStyle(WorkspaceFieldStyle())
                     Button("Save to Keychain") { do { try model.saveOpenAIKey(apiKey); apiKey = ""; keyMessage = "Key saved securely." } catch { apiKey = ""; keyMessage = error.localizedDescription } }.buttonStyle(WorkspaceButtonStyle()).disabled(apiKey.isEmpty)
                     if model.keyConfigured { Button("Remove key") { do { try model.removeOpenAIKey(); keyMessage = "Key removed." } catch { keyMessage = error.localizedDescription } }.buttonStyle(WorkspaceButtonStyle()) }
                 }
+                }
                 if let keyMessage { Text(keyMessage).font(.system(size: 11)).foregroundStyle(muted) }
-                Text("Questions and searches are sent to \(model.aiProvider.title); action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API requests and web searches use your API credits. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
+                Text("Questions and searches are sent to \(model.aiProvider.title); action planning also sends the target app and workflow names. No screenshots or audio are sent by this feature. API-key requests use API billing; ChatGPT account requests use that plan’s app allowance. AI action plans require review; generated shell commands are blocked.").font(.system(size: 11)).foregroundStyle(muted).lineSpacing(4)
             }.padding(22).workspaceCard()
+            if model.aiProvider == .chatGPT { ChatGPTSettingsView(model: model, connection: model.chatGPT) }
         }
     }
 

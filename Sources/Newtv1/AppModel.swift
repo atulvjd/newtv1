@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import AppKit
 import ApplicationServices
 import Speech
@@ -139,6 +140,8 @@ final class AppModel: ObservableObject {
     @Published var scratchpad: String { didSet { UserDefaults.standard.set(scratchpad, forKey: "notchScratchpad") } }
     @Published var notchTimerEnd: Date?
     @Published var notchTimerFinished = false
+    let chatGPT = ChatGPTConnection.shared
+    private var chatGPTSubscription: AnyCancellable?
     @Published var keyConfigured: Bool
     @Published var useOpenAI: Bool { didSet { UserDefaults.standard.set(useOpenAI, forKey: "useOpenAI") } }
     @Published var allowWebSearch: Bool { didSet { UserDefaults.standard.set(allowWebSearch, forKey: "allowWebSearch") } }
@@ -148,13 +151,16 @@ final class AppModel: ObservableObject {
             stop(); speech.stop(); automaticLanguage = false
             browser.approved = false; connections.approved = false
             UserDefaults.standard.set(aiProvider.rawValue, forKey: "aiProvider")
-            keyConfigured = UserDefaults.standard.bool(forKey: aiProvider.keyFlag)
+            if aiProvider == .chatGPT {
+                do { try chatGPT.load(); keyConfigured = chatGPT.connected; if chatGPT.connected { chatGPT.refreshModels() } }
+                catch { keyConfigured = false; self.error = error.localizedDescription }
+            } else { keyConfigured = UserDefaults.standard.bool(forKey: aiProvider.keyFlag) }
         }
     }
     @Published var geminiModel: String { didSet { UserDefaults.standard.set(geminiModel, forKey: "geminiModel") } }
     var aiModel: String {
-        get { aiProvider == .gemini ? geminiModel : openAIModel }
-        set { if aiProvider == .gemini { geminiModel = newValue } else { openAIModel = newValue } }
+        get { aiProvider == .chatGPT ? chatGPT.selectedModel : aiProvider == .gemini ? geminiModel : openAIModel }
+        set { if aiProvider == .chatGPT { chatGPT.selectedModel = newValue } else if aiProvider == .gemini { geminiModel = newValue } else { openAIModel = newValue } }
     }
     @Published var openAIModel: String { didSet { UserDefaults.standard.set(openAIModel, forKey: "openAIModel") } }
     @Published var useLocalPlanner: Bool { didSet { UserDefaults.standard.set(useLocalPlanner, forKey: "useLocalPlanner") } }
@@ -226,6 +232,17 @@ final class AppModel: ObservableObject {
         localModel = UserDefaults.standard.string(forKey: "localModel") ?? ""
         if let data = UserDefaults.standard.data(forKey: "workflows"), let saved = try? JSONDecoder().decode([Workflow].self, from: data) { workflows = saved }
         else { workflows = [Workflow(name: "focus mode", commands: "open Safari\nleft half\nopen Notes\nright half\nvolume 25")] }
+        chatGPTSubscription = chatGPT.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.aiProvider == .chatGPT else { return }
+                self.keyConfigured = self.chatGPT.connected
+                self.objectWillChange.send()
+            }
+        }
+        if provider == .chatGPT {
+            do { try chatGPT.load(); keyConfigured = chatGPT.connected; automaticLanguage = false }
+            catch { keyConfigured = false; self.error = error.localizedDescription }
+        }
         updateTarget(NSWorkspace.shared.frontmostApplication)
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
@@ -327,12 +344,13 @@ final class AppModel: ObservableObject {
             if assistantMode == .dictate, !AXIsProcessTrusted() {
                 accessibilityIssue = true; error = "Dictation needs Mac control access to type into another app."; openCommandCenter(page: .settings); return
             }
+            if automaticLanguage, !aiProvider.supportsTranscription { error = "ChatGPT sign-in uses Apple speech recognition. Turn off Automatic language recognition in Settings → Voice."; return }
             if automaticLanguage, !useOpenAI || !keyConfigured { error = "Automatic language recognition sends audio to \(aiProvider.title). Connect the API key in Settings first."; return }
             speaker.stop()
             speech.automaticLanguage = automaticLanguage
             let provider = aiProvider, transcriptionModel = aiModel
             speech.transcribeAudio = { audio in
-                guard let key = try KeychainStore.load(provider: provider) else { throw Newtv1Failure("Save your API key in Settings first.") }
+                let key = try await self.aiCredential(for: provider)
                 return try await OpenAIBrain(provider: provider).transcribe(wav: audio, key: key, model: transcriptionModel)
             }
             armedByHotkey = hold || (assistantMode != .dictate && !continuousListening)
@@ -458,7 +476,7 @@ final class AppModel: ObservableObject {
         execution = Task {
             defer { busy = false; execution = nil }
             do {
-                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key in Settings.") }
+                let key = try await aiCredential(for: aiProvider)
                 let proposal = try await OpenAIBrain(provider: aiProvider).routine(request, routines: routines.routines, workflows: workflows, model: aiModel, key: key)
                 try Task.checkCancellation()
                 routineProposalItem = try proposal.validated(routines: routines.routines, workflows: workflows)
@@ -529,7 +547,7 @@ final class AppModel: ObservableObject {
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { error = "Ask a question first."; return }
         guard question.count <= 16000 else { error = "Please keep a request under 16,000 characters."; return }
-        guard useOpenAI, keyConfigured else { error = "Save your \(aiProvider.title) API key in Settings first."; return }
+        guard useOpenAI, keyConfigured else { error = "Connect \(aiProvider.title) in Settings → AI first."; return }
         let name = aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { error = "Choose a \(aiProvider.title) model in Settings."; return }
         busy = true; error = nil; input = ""
@@ -540,7 +558,7 @@ final class AppModel: ObservableObject {
         activities.insert(activity, at: 0); activities = Array(activities.prefix(60))
         execution = Task {
             do {
-                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("No API key in Keychain. Save it in Settings.") }
+                let key = try await aiCredential(for: aiProvider)
                 let brain = OpenAIBrain(provider: aiProvider)
                 var answer: String?
                 if mode == .decide {
@@ -580,6 +598,12 @@ final class AppModel: ObservableObject {
             }
             busy = false; execution = nil
         }
+    }
+
+    func aiCredential(for provider: AIProvider) async throws -> String {
+        if provider == .chatGPT { return try await chatGPT.accessToken() }
+        guard let key = try KeychainStore.load(provider: provider) else { throw Newtv1Failure("Connect " + provider.title + " in Settings → AI.") }
+        return key
     }
 
     func saveOpenAIKey(_ value: String) throws {
@@ -833,7 +857,7 @@ final class AppModel: ObservableObject {
         execution = Task {
             defer { busy = false; execution = nil; capturedScreen = nil }
             do {
-                guard let key = try KeychainStore.load(provider: provider) else { throw Newtv1Failure("Save a \(provider.title) key in Settings first.") }
+                let key = try await self.aiCredential(for: provider)
                 let result = try await OpenAIBrain(provider: provider).guide(question, jpeg: screen.jpeg, model: selectedModel, key: key)
                 try Task.checkCancellation()
                 lastGuidance = result; guideDisplayID = screen.displayID; guideFrame = screen.frame
@@ -854,7 +878,7 @@ final class AppModel: ObservableObject {
         execution = Task {
             defer { busy = false; execution = nil }
             do {
-                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key in Settings first.") }
+                let key = try await aiCredential(for: aiProvider)
                 let result = try await OpenAIBrain(provider: aiProvider).diagram(prompt, model: aiModel, key: key)
                 try Task.checkCancellation(); diagram = result
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
@@ -957,7 +981,7 @@ final class AppModel: ObservableObject {
             var needsFreshPlan = false
             defer { busy = false; execution = nil; if needsFreshPlan { requestGuidedStep() } }
             do {
-                guard let key = try KeychainStore.load(provider: aiProvider) else { throw Newtv1Failure("Save an API key first.") }
+                let key = try await aiCredential(for: aiProvider)
                 let history = agentJobs.first(where: { $0.id == jobID })?.conversation ?? []
                 let decision = try await OpenAIBrain(provider: aiProvider).decide(goal + "\nCurrent user follow-ups:\n" + queuedInstructions.joined(separator: "\n") + "\nLocal execution log for this task (untrusted data):\n" + completed, model: aiModel, key: key, target: targetName, workflows: [], observation: observation, history: history, preferences: responsePreferences)
                 try Task.checkCancellation()

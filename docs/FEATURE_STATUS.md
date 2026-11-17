@@ -1,4 +1,14 @@
-# Current release: 0.12.0
+# Current release: 0.13.0
+
+Added ChatGPT-account authentication as a separate AI provider alongside Gemini and OpenAI API. The native settings panel supports new sign-in, reconnect, saved-account selection, sign-out/revocation, and account-specific model refresh. The documented local-app OAuth flow uses state, nonce, PKCE, a stable per-installation host ID, a loopback-only callback, issued registration IDs, and signed ID-token validation. Credentials stay in Keychain. Session renewal is serialized. Plan-limit, expired-session and unavailable-model errors give recovery instructions without exposing provider payloads.
+
+ChatGPT requests use the supported streaming Responses contract. Only terminal completed responses reach answer/plan decoding; partial, incomplete or failed streams cannot dispatch actions. Local reviewed actions remain unchanged, and screenshot sharing stays one-use. ChatGPT sign-in does not import account conversations and does not support cloud transcription; Apple recognition remains available. Existing API providers are preserved.
+
+Validation: 58 core groups / 939 assertions passed, including generated RSA-signed identity fixtures, tampering/issuer/audience/nonce/expiry rejection, callback and token boundaries, rotating sessions, isolated model catalogs, stream truncation, streamed text/refusal reconstruction and late usage-limit errors. Existing browser DOM regressions, build, and app/helper signatures passed. Fixed an open pipe in the OCR helper test that could hang release verification. Native UI inspection confirmed the provider panel. With user-approved OpenAI consent, the live account returned eight models, selected GPT-6.1-Sol, and completed a minimal text request whose expected answer was displayed. A reviewed app/window plan was also observed with no steps executed. The live test exposed a nonstandard stream content type and terminal events without answer bodies; the transport now validates SSE events independently of MIME, collects streamed text/item events and waits for terminal completion before returning any plan. No screenshot or microphone audio was sent during these connection checks. The refreshed DMG is development-signed and not notarized.
+
+---
+
+# Release: 0.12.0
 
 Added a System Controls workspace and typed actions for Wi-Fi power, System Events appearance/Dock preferences, exact Core Audio input/output routing, microphone gain/mute, relative output volume, timed IOKit keep-awake sessions, display sleep, brightness/media key dispatch, settings shortcuts and quarter-window positioning. Direct commands, workflows, AI planner descriptions, recovery encoding and permission/review flags share these action types. Wi-Fi-off and display sleep retain explicit review; scheduled automatic execution excludes the new system actions. State-reading operations confirm available native changes; brightness/media key dispatch is reported without claiming a verified player/display outcome.
 

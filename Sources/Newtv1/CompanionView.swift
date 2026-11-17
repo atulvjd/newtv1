@@ -254,7 +254,8 @@ struct CompanionPreferences: View {
                 Text(String(format: "%.1f s", model.speechPauseDuration)).monospacedDigit().frame(width: 45)
             }
             Text("The microphone closes after this much time without speech. Default: 2 seconds. Increase it for longer pauses between phrases.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
-            Toggle("Automatic language recognition through \(model.aiProvider.title)", isOn: $model.automaticLanguage)
+            Toggle("Automatic language recognition through \(model.aiProvider.title)", isOn: $model.automaticLanguage).disabled(!model.aiProvider.supportsTranscription)
+            if !model.aiProvider.supportsTranscription { Text("ChatGPT account sign-in uses Apple speech recognition. Choose Gemini or OpenAI API to use cloud audio transcription.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary) }
             if model.automaticLanguage { Text("Recorded audio is sent to \(model.aiProvider.title) before the wake phrase is checked. Uses API credits. Turn off to use local Apple recognition.").font(.system(size: 11)).foregroundStyle(.orange) }
             Picker("Mode", selection: $model.assistantMode) { ForEach(AssistantMode.allCases) { Text($0.title).tag($0) } }
             Toggle("Show live captions for spoken replies", isOn: $spokenCaptions)

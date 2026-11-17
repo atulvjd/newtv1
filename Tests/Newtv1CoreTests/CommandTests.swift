@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import CoreText
 import ImageIO
+import Security
 import Newtv1Core
 
 // Dependency-free regression runner so the suite also runs with Command Line Tools,
@@ -594,6 +595,11 @@ final class CommandTests {
             process.executableURL = URL(fileURLWithPath: helper)
             process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
             try process.run()
+            try input.fileHandleForReading.close()
+            try output.fileHandleForWriting.close()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
+                if process.isRunning { process.terminate() }
+            }
             try input.fileHandleForWriting.write(contentsOf: data as Data)
             try input.fileHandleForWriting.close()
             let response = try output.fileHandleForReading.readToEnd() ?? Data()
@@ -618,6 +624,165 @@ final class CommandTests {
         XCTAssertTrue(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(120)))
         XCTAssertFalse(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(121)))
         XCTAssertFalse(ScreenContextPolicy.isFresh(capture, now: capture.addingTimeInterval(-1)))
+    }
+
+    func testChatGPTAuthorizationBoundaries() throws {
+        let state = String(repeating: "s", count: 43), nonce = String(repeating: "n", count: 43), verifier = String(repeating: "v", count: 43)
+        let host = "urn:uuid:" + UUID().uuidString
+        let address = try ChatGPTAuthorization.authorizeURL(hostID: host, port: 1455, state: state, nonce: nonce, verifier: verifier)
+        let parts = URLComponents(url: address, resolvingAgainstBaseURL: false)!
+        let query = Dictionary(uniqueKeysWithValues: (parts.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(parts.host, "auth.openai.com")
+        XCTAssertEqual(parts.path, "/api/accounts/authorize")
+        XCTAssertEqual(query["client_id"], "dynamic_agent_client")
+        XCTAssertEqual(query["agent_name_hint"], "Newtv1")
+        XCTAssertEqual(query["ext_agent_host_id"], host)
+        XCTAssertEqual(query["redirect_uri"], "http://127.0.0.1:1455/auth/callback")
+        XCTAssertEqual(query["code_challenge"], OAuthFlow.challenge(verifier))
+        XCTAssertEqual(query["scope"], ChatGPTAuthorization.scopes)
+        let callback = "/auth/callback?state=\(state)&code=abc&client_id=oaiapp_example"
+        let result = try ChatGPTAuthorization.callback(callback, state: state, previousClientID: nil)
+        XCTAssertEqual(result.code, "abc")
+        XCTAssertEqual(result.clientID, "oaiapp_example")
+        XCTAssertEqual(try ChatGPTAuthorization.callback("/auth/callback?state=\(state)&code=abc", state: state, previousClientID: "oaiapp_example").clientID, "oaiapp_example")
+        for bad in ["/oauth?state=\(state)&code=abc&client_id=oaiapp_example", "/auth/callback?state=wrong&code=abc&client_id=oaiapp_example", callback + "&state=\(state)", callback + "&code=other", callback + "&client_id=other", callback + "#fragment", "https://evil.example" + callback, "/auth/callback?state=\(state)&code=abc", "/auth/callback?state=\(state)&code=abc&client_id=dynamic_agent_client", "/auth/callback?state=\(state)&error=access_denied"] {
+            XCTAssertThrowsError(try ChatGPTAuthorization.callback(bad, state: state, previousClientID: nil))
+        }
+        XCTAssertThrowsError(try ChatGPTAuthorization.callback(callback, state: state, previousClientID: "different"))
+        XCTAssertThrowsError(try ChatGPTAuthorization.authorizeURL(hostID: "email@example.com", port: 1455, state: state, nonce: nonce, verifier: verifier))
+        XCTAssertThrowsError(try ChatGPTAuthorization.authorizeURL(hostID: host, port: 0, state: state, nonce: nonce, verifier: verifier))
+        let now = Date(timeIntervalSince1970: 2000)
+        let initial: [String: Any] = ["access_token": "access", "refresh_token": "refresh1", "id_token": "identity", "token_type": "Bearer", "expires_in": 3600, "scope": ChatGPTAuthorization.scopes]
+        let session = try ChatGPTSession.decode(JSONSerialization.data(withJSONObject: initial), now: now)
+        XCTAssertTrue(session.permitsInference)
+        XCTAssertEqual(session.expiresAt, now.addingTimeInterval(3600))
+        let renewed = try ChatGPTSession.decode(JSONSerialization.data(withJSONObject: ["access_token": "new", "refresh_token": "refresh2", "token_type": "Bearer", "expires_in": 1800]), previous: session, now: now)
+        XCTAssertEqual(renewed.refreshToken, "refresh2")
+        XCTAssertEqual(renewed.idToken, session.idToken)
+        XCTAssertTrue(renewed.permitsInference)
+        let restricted = try ChatGPTSession.decode(JSONSerialization.data(withJSONObject: initial.merging(["scope": "openid email"]) { _, value in value }), now: now)
+        XCTAssertFalse(restricted.permitsInference)
+        for patch in [["access_token": ""], ["id_token": ""], ["expires_in": -1], ["expires_in": 100000], ["token_type": "Basic"]] as [[String: Any]] {
+            XCTAssertThrowsError(try ChatGPTSession.decode(JSONSerialization.data(withJSONObject: initial.merging(patch) { _, value in value }), now: now))
+        }
+        let account = ChatGPTRegistration(clientID: result.clientID, subject: "subject", email: "test@example.com", name: "Test", session: session)
+        let different = ChatGPTRegistration(clientID: "other", subject: "subject", email: "test@example.com", name: "Test", session: session)
+        XCTAssertFalse(account.id == different.id)
+        let returning = try ChatGPTAuthorization.authorizeURL(hostID: host, port: 54321, state: state, nonce: nonce, verifier: verifier, registration: account)
+        let returnQuery = URLComponents(url: returning, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(returnQuery.first { $0.name == "client_id" }?.value, result.clientID)
+        XCTAssertEqual(returnQuery.first { $0.name == "id_token_hint" }?.value, "identity")
+        XCTAssertFalse(returnQuery.contains { $0.name == "agent_name_hint" })
+        XCTAssertEqual(try JSONDecoder().decode(ChatGPTRegistration.self, from: JSONEncoder().encode(account)), account)
+        XCTAssertFalse(AIProvider.chatGPT.supportsTranscription)
+        XCTAssertThrowsError(try KeychainStore.save("not-a-key", provider: .chatGPT))
+    }
+
+    func testChatGPTSignedIdentity() throws {
+        let attributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits as String: 2048]
+        let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, nil)!
+        let publicKey = SecKeyCopyPublicKey(privateKey)!
+        let exported = SecKeyCopyExternalRepresentation(publicKey, nil)! as Data
+        // Decode the generated PKCS#1 RSA public key to a JWK fixture.
+        var offset = 0
+        func length() -> Int {
+            let first = Int(exported[offset]); offset += 1
+            if first < 128 { return first }
+            var value = 0
+            for _ in 0..<(first & 127) { value = (value << 8) | Int(exported[offset]); offset += 1 }
+            return value
+        }
+        offset += 1; _ = length()
+        offset += 1; let nLength = length(); let n = Data(exported[offset..<(offset + nLength)].drop(while: { $0 == 0 })); offset += nLength
+        offset += 1; let eLength = length(); let e = Data(exported[offset..<(offset + eLength)])
+        func encoded(_ data: Data) -> String { data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") }
+        let jwk: [String: Any] = ["kty": "RSA", "kid": "fixture", "alg": "RS256", "use": "sig", "n": encoded(n), "e": encoded(e)]
+        let jwks = try JSONSerialization.data(withJSONObject: ["keys": [jwk]])
+        let now = Date(timeIntervalSince1970: 5000)
+        let claims: [String: Any] = ["iss": ChatGPTAuthorization.issuer, "sub": "account1", "aud": "oaiapp_fixture", "exp": 5100, "iat": 4900, "nonce": "nonce", "email": "same@example.com"]
+        func signed(_ claims: [String: Any], alg: String = "RS256") throws -> String {
+            let header = encoded(try JSONSerialization.data(withJSONObject: ["alg": alg, "kid": "fixture"]))
+            let payload = encoded(try JSONSerialization.data(withJSONObject: claims))
+            let message = header + "." + payload
+            let signature = SecKeyCreateSignature(privateKey, .rsaSignatureMessagePKCS1v15SHA256, Data(message.utf8) as CFData, nil)! as Data
+            return message + "." + encoded(signature)
+        }
+        let valid = try signed(claims)
+        XCTAssertEqual(try ChatGPTIdentity.validate(token: valid, jwks: jwks, clientID: "oaiapp_fixture", nonce: "nonce", now: now).subject, "account1")
+        XCTAssertEqual(try ChatGPTIdentity.validate(token: valid, jwks: jwks, clientID: "oaiapp_fixture", nonce: "nonce", now: now).email, "same@example.com")
+        for patch in [["iss": "https://evil.example"], ["aud": "other"], ["nonce": "wrong"], ["exp": 4999], ["sub": ""], ["iat": 9000], ["nbf": 9000], ["aud": ["oaiapp_fixture", "other"]], ["azp": "other"]] as [[String: Any]] {
+            XCTAssertThrowsError(try ChatGPTIdentity.validate(token: signed(claims.merging(patch) { _, value in value }), jwks: jwks, clientID: "oaiapp_fixture", nonce: "nonce", now: now))
+        }
+        XCTAssertThrowsError(try ChatGPTIdentity.validate(token: signed(claims, alg: "none"), jwks: jwks, clientID: "oaiapp_fixture", nonce: "nonce", now: now))
+        let duplicateKeys = try JSONSerialization.data(withJSONObject: ["keys": [jwk, jwk]])
+        XCTAssertThrowsError(try ChatGPTIdentity.validate(token: valid, jwks: duplicateKeys, clientID: "oaiapp_fixture", nonce: "nonce", now: now))
+        var pieces = valid.split(separator: ".").map(String.init)
+        pieces[1] = encoded(try JSONSerialization.data(withJSONObject: claims.merging(["sub": "forged"]) { _, value in value }))
+        XCTAssertThrowsError(try ChatGPTIdentity.validate(token: pieces.joined(separator: "."), jwks: jwks, clientID: "oaiapp_fixture", nonce: "nonce", now: now))
+    }
+
+    func testChatGPTStreamingAndModelCatalog() throws {
+        let body = try ChatGPTPayload.request(["model": "model-one", "store": true, "input": "Hello", "max_output_tokens": 1000, "max_tool_calls": 2, "temperature": 1, "previous_response_id": "old", "tools": [["type": "web_search"]]])
+        XCTAssertEqual(body["store"] as? Bool, false)
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertEqual((body["input"] as? [[String: String]])?.first?["content"], "Hello")
+        for omitted in ["max_output_tokens", "max_tool_calls", "temperature", "previous_response_id"] { XCTAssertTrue(body[omitted] == nil) }
+        XCTAssertThrowsError(try ChatGPTPayload.request(["input": [["role": "system", "content": "context"]]]))
+        XCTAssertThrowsError(try ChatGPTPayload.request(["input": "hello", "tools": [["type": "computer_use"]]]))
+        XCTAssertThrowsError(try ChatGPTPayload.request(["input": [["role": "user", "content": [["type": "input_audio", "data": "x"]]]]]))
+        let image = try ChatGPTPayload.request(["input": [["role": "user", "content": [["type": "input_image", "image_url": "data:image/jpeg;base64,YQ=="]]]]])
+        XCTAssertTrue(image["input"] != nil)
+        let catalog = try ChatGPTModel.decode(JSONSerialization.data(withJSONObject: ["models": [["slug": "first", "display_name": "First", "visibility": "list"], ["slug": "hidden", "visibility": "hide"], ["slug": "second", "display_name": "Second", "visibility": "list"], ["slug": "first", "visibility": "list"], ["slug": "unsafe/path", "visibility": "list"]]]))
+        XCTAssertEqual(catalog.map(\.id), ["first", "second"])
+        XCTAssertEqual(catalog.map(\.name), ["First", "Second"])
+        func completedEvent() throws -> String {
+            let response: [String: Any] = ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "Finished"]]]]]
+            return "data: " + String(decoding: try JSONSerialization.data(withJSONObject: ["type": "response.completed", "response": response]), as: UTF8.self)
+        }
+        var stream = ChatGPTEventStream()
+        XCTAssertTrue(try stream.consume("event: response.output_text.delta") == nil)
+        XCTAssertTrue(try stream.consume(#"data: {"type":"response.output_text.delta","delta":"Partial"}"#) == nil)
+        XCTAssertTrue(try stream.consume("") == nil)
+        XCTAssertFalse(stream.completed)
+        _ = try stream.consume(completedEvent())
+        let final = try stream.consume("")
+        XCTAssertEqual(try final?.text(), "Finished")
+        XCTAssertTrue(stream.completed)
+        XCTAssertTrue(try stream.finish() == nil)
+        var sparse = ChatGPTEventStream()
+        _ = try sparse.consume(#"data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"Streamed "}"#); _ = try sparse.consume("")
+        _ = try sparse.consume(#"data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"answer"}"#); _ = try sparse.consume("")
+        XCTAssertFalse(sparse.completed)
+        _ = try sparse.consume(#"data: {"type":"response.completed","response":{"status":"completed","output":[]}}"#)
+        XCTAssertEqual(try sparse.finish()?.text(), "Streamed answer")
+        var itemOnly = ChatGPTEventStream()
+        _ = try itemOnly.consume(#"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","content":[{"type":"output_text","text":"Final item"}]}}"#); _ = try itemOnly.consume("")
+        _ = try itemOnly.consume(#"data: {"type":"response.completed","response":{"status":"completed"}}"#)
+        XCTAssertEqual(try itemOnly.finish()?.text(), "Final item")
+        var streamedRefusal = ChatGPTEventStream()
+        _ = try streamedRefusal.consume(#"data: {"type":"response.refusal.done","output_index":0,"content_index":0,"refusal":"Cannot help with that"}"#); _ = try streamedRefusal.consume("")
+        _ = try streamedRefusal.consume(#"data: {"type":"response.completed","response":{"status":"completed"}}"#)
+        let refusal = try streamedRefusal.finish()
+        XCTAssertThrowsError(try refusal?.text())
+        var truncated = ChatGPTEventStream()
+        _ = try truncated.consume(#"data: {"type":"response.output_text.delta","delta":"Partial plan"}"#)
+        _ = try truncated.consume("")
+        XCTAssertThrowsError(try truncated.finish())
+        for code in ["subscription_sharing_usage_limit_exceeded", "subscription_sharing_usage_unavailable", "invalid_token", "model_not_found"] {
+            var failed = ChatGPTEventStream()
+            _ = try failed.consume(#"data: {"type":"response.output_text.delta","delta":"Do something"}"#); _ = try failed.consume("")
+            let errorEvent: [String: Any] = ["type": "response.failed", "response": ["error": ["code": code, "message": "sensitive echoed data"]]]
+            _ = try failed.consume("data: " + String(decoding: JSONSerialization.data(withJSONObject: errorEvent), as: UTF8.self))
+            XCTAssertThrowsError(try failed.consume(""))
+            XCTAssertFalse(ChatGPTPayload.failure(code: code).localizedDescription.contains("sensitive"))
+        }
+        var incomplete = ChatGPTEventStream()
+        _ = try incomplete.consume(#"data: {"type":"response.incomplete","response":{"status":"incomplete"}}"#)
+        XCTAssertThrowsError(try incomplete.finish())
+        var malformed = ChatGPTEventStream(); _ = try malformed.consume("data: invalid json")
+        XCTAssertThrowsError(try malformed.finish())
+        var oversized = ChatGPTEventStream()
+        XCTAssertThrowsError(try oversized.consume("data: " + String(repeating: "x", count: 2_000_001)))
     }
 
     func testAcousticSpeechEndpoint() throws {
@@ -999,7 +1164,10 @@ struct CoreChecks {
             ("system command bounds, risks, workflows and persistence", suite.testSystemCommands),
             ("exact audio devices and quarter-window geometry", suite.testAudioDeviceMatchingAndQuarterWindows),
             ("screen requests, literal boundaries and preview expiry", suite.testScreenRequestRoutingAndExpiry),
-            ("bounded local screen text recognition", suite.testLocalScreenOCR)
+            ("bounded local screen text recognition", suite.testLocalScreenOCR),
+            ("ChatGPT authorization and session boundaries", suite.testChatGPTAuthorizationBoundaries),
+            ("ChatGPT signed identity verification", suite.testChatGPTSignedIdentity),
+            ("ChatGPT streaming completion, plan errors and model catalog", suite.testChatGPTStreamingAndModelCatalog)
         ]
         for (name, test) in cases {
             let before = failures.count

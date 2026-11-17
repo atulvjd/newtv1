@@ -19,7 +19,42 @@ public final class OpenAIBrain: NSObject, URLSessionTaskDelegate {
         if provider == .gemini { request.setValue(key, forHTTPHeaderField: "x-goog-api-key") }
         else { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: provider == .gemini ? GeminiPayload.request(body) : body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: provider == .gemini ? GeminiPayload.request(body) : provider == .chatGPT ? ChatGPTPayload.request(body) : body)
+        if provider == .chatGPT {
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else { throw ChatGPTPayload.failure(code: nil) }
+            guard http.statusCode == 200 else {
+                if http.statusCode == 401 { throw ChatGPTPayload.failure(code: "invalid_token") }
+                if http.statusCode == 429 { throw ChatGPTPayload.failure(code: "subscription_sharing_usage_limit_exceeded") }
+                throw CommandError.invalid(http.statusCode == 403 ? "ChatGPT denied this request. Check the account’s app permissions in ChatGPT Settings → Usage." : "ChatGPT request failed (HTTP \(http.statusCode)). Refresh the account’s model list or reconnect in Settings → AI.")
+            }
+            // Some plan-enabled gateways return SSE with a generic content type. The
+            // bounded event parser validates the bytes and terminal response itself.
+            var stream = ChatGPTEventStream()
+            // AsyncBytes.lines omits empty lines. Frame SSE explicitly so partial events
+            // and a terminal failure can never be mistaken for an executable plan.
+            var line = Data(), completed: OpenAIResponse?
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if byte == 10 {
+                    if line.last == 13 { line.removeLast() }
+                    guard let text = String(data: line, encoding: .utf8) else { throw CommandError.invalid("Invalid ChatGPT stream encoding.") }
+                    if let response = try stream.consume(text) { completed = response }
+                    line.removeAll(keepingCapacity: true)
+                } else {
+                    guard line.count < 2_000_000 else { throw CommandError.invalid("ChatGPT stream line exceeded its size limit.") }
+                    line.append(byte)
+                }
+            }
+            if !line.isEmpty {
+                guard let text = String(data: line, encoding: .utf8) else { throw CommandError.invalid("Invalid ChatGPT stream encoding.") }
+                if let response = try stream.consume(text) { completed = response }
+            }
+            if let response = try stream.finish() { completed = response }
+            guard let completed else { throw ChatGPTPayload.failure(code: nil) }
+            return completed
+        }
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw CommandError.invalid("No response from " + provider.title + ".") }
@@ -134,6 +169,7 @@ public final class OpenAIBrain: NSObject, URLSessionTaskDelegate {
     }
 
     public func transcribe(wav: Data, key: String, model: String = "gemini-2.5-flash") async throws -> String {
+        guard provider.supportsTranscription else { throw CommandError.invalid("ChatGPT account sign-in does not support audio transcription. Use Apple recognition or choose an API provider for cloud speech.") }
         if provider == .gemini {
             _ = try AudioTranscription.multipart(wav: wav, boundary: "Validation")
             let body: [String: Any] = ["model": model, "max_output_tokens": 3000,

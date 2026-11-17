@@ -51,6 +51,8 @@ public struct ChatGPTEventStream {
     private var payload: [String] = []
     private var eventBytes = 0
     private var receivedBytes = 0
+    private var items: [Int: [String: Any]] = [:]
+    private var parts: [Int: [Int: [String: Any]]] = [:]
     public private(set) var completed = false
     public init() {}
     public mutating func consume(_ line: String) throws -> OpenAIResponse? {
@@ -77,8 +79,38 @@ public struct ChatGPTEventStream {
         if value == "[DONE]" { return nil }
         guard let data = value.data(using: .utf8), let event = try JSONSerialization.jsonObject(with: data) as? [String: Any], let type = event["type"] as? String else { throw CommandError.invalid("ChatGPT returned an invalid stream event.") }
         switch type {
+        case "response.output_item.done":
+            if let index = event["output_index"] as? Int, (0..<100).contains(index), let item = event["item"] as? [String: Any] { items[index] = item }
+            return nil
+        case "response.content_part.done":
+            if let output = event["output_index"] as? Int, (0..<100).contains(output), let content = event["content_index"] as? Int, (0..<100).contains(content), let part = event["part"] as? [String: Any] { parts[output, default: [:]][content] = part }
+            return nil
+        case "response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done":
+            guard let output = event["output_index"] as? Int, (0..<100).contains(output), let content = event["content_index"] as? Int, (0..<100).contains(content) else { return nil }
+            let refusal = type.hasPrefix("response.refusal")
+            let field = refusal ? "refusal" : "text"
+            let existing = parts[output]?[content]?[field] as? String ?? ""
+            let value = type.hasSuffix(".delta") ? existing + (event["delta"] as? String ?? "") : event[field] as? String ?? existing
+            guard value.utf8.count <= 200_000 else { throw CommandError.invalid("ChatGPT’s answer exceeded the text limit.") }
+            parts[output, default: [:]][content] = ["type": refusal ? "refusal" : "output_text", field: value]
+            return nil
         case "response.completed":
-            guard !completed, let response = event["response"] as? [String: Any], response["status"] as? String == "completed" else { throw ChatGPTPayload.failure(code: nil) }
+            guard !completed, var response = event["response"] as? [String: Any], response["status"] as? String == "completed" else { throw ChatGPTPayload.failure(code: nil) }
+            // Some account streams omit message bodies from the terminal envelope.
+            // Reconstruct from observed content/item events only after completion.
+            let terminal = response["output"] as? [[String: Any]] ?? []
+            let hasMessage = terminal.contains { item in
+                item["type"] as? String == "message" && (item["content"] as? [[String: Any]] ?? []).contains { ["output_text", "refusal"].contains($0["type"] as? String ?? "") }
+            }
+            if !hasMessage {
+                var rebuilt: [[String: Any]] = []
+                for index in Set(items.keys).union(parts.keys).sorted() {
+                    let item = items[index]
+                    if item?["type"] as? String == "message", let content = item?["content"] as? [[String: Any]], !content.isEmpty { rebuilt.append(item!) }
+                    else if let content = parts[index], !content.isEmpty { rebuilt.append(["type": "message", "content": content.keys.sorted().compactMap { content[$0] }]) }
+                }
+                response["output"] = rebuilt
+            }
             let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: JSONSerialization.data(withJSONObject: response))
             completed = true
             return decoded

@@ -33,6 +33,18 @@ Keep-awake sessions last 1–180 minutes and prevent idle system sleep, while di
 
 Screen Recording is a macOS grant and must be enabled for the current app copy. Captures exclude Newtv1’s own windows, remain in memory, and expire after two minutes. Local OCR uses Apple Vision with automatic language detection and bounded image/text sizes. It runs in a separate CPU reader process with private pipes and a 30-second deadline so a recognition failure cannot terminate the workspace. Click **Share once with PROVIDER** to send the displayed screenshot and question for a visual answer. That approval is consumed once; provider and model are fixed for the request. Screen contents are treated as untrusted data by the visual guide. No background screen stream or automatic screenshot upload is enabled.
 
+## ChatGPT account connection (0.13)
+
+Choose **Settings → AI → Provider → ChatGPT account**, then **Continue with ChatGPT**. Newtv1 opens OpenAI’s browser authorization page, where you choose the account/workspace and approve plan usage. Eligible local-app access depends on your ChatGPT plan and OpenAI’s availability. It does not import your ChatGPT conversations. The existing Gemini/OpenAI API options remain available.
+
+After sign-in, Newtv1 lists the models returned for that account. Choose one, enable AI questions and actions, and use it for answers, web search where permitted, reviewed action plans, browser plans, diagrams, routine proposals, and screenshots you explicitly share once. API-key billing and ChatGPT-plan limits remain separate. Manage the app’s allowance under **ChatGPT Settings → Usage**.
+
+The connection uses a stable per-installation host ID, loopback-only callback, state, nonce and PKCE. It verifies the ID token’s RSA signature, issuer, audience, nonce and expiration before selecting the account. Registrations remain separate even when emails match. Session tokens are stored in macOS Keychain, refreshed serially near expiry, and never included in the app or DMG. Reconnect retains the issued client registration; signing out attempts remote refresh-token revocation before clearing tokens locally, with an explicit message if remote revocation was not confirmed.
+
+Responses use the documented streaming contract and are accepted only after a completed terminal response. Text and refusal events are reconstructed when the terminal envelope omits message bodies. An interrupted stream, refusal, plan-limit failure, or invalid model cannot become an executable partial plan. This route does not support audio transcription, hosted computer-use, or automatic access to ChatGPT chats. Voice commands use Apple recognition; choose an API provider if you need cloud transcription. Newtv1’s local action reviews and screen-sharing controls still apply.
+
+Implementation references: [OpenAI local-app sign-in](https://developers.openai.com/siwc/token-sharing-open-source), [account and session lifecycle](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions), [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
 ## Companion modes
 
 Open **Newt** from the sidebar or notch window button. Its mode selector and the notch's mode menu share the same selection:
@@ -120,7 +132,7 @@ bash scripts/build-dmg.sh
 
 This builds the release app and creates `dist/Newtv1-VERSION-ARCH.dmg` with a SHA-256 checksum beside it. Use `bash scripts/build-dmg.sh --skip-build` to package an existing verified `dist/Newtv1.app` without rebuilding or changing its signature. The image includes the app, an Applications shortcut, installation instructions, and optional browser integration files. The packager verifies the disk-image checksum, mounts it read-only, checks the bundled app signature and file contents, then ejects it.
 
-Open the DMG and drag **Newtv1.app** to **Applications**. Copy optional browser integration files to a permanent location before loading the extension; setup instructions are included under Extras. Keys, credentials, conversations, and personal preferences are not packaged. The current `Newtv1-0.12.0-arm64.dmg` is an Apple Silicon development build, not Apple-notarized. The packaging script uses the architecture and version of the supplied app; public releases still require Developer ID signing and notarization.
+Open the DMG and drag **Newtv1.app** to **Applications**. Copy optional browser integration files to a permanent location before loading the extension; setup instructions are included under Extras. Keys, credentials, conversations, and personal preferences are not packaged. The current `Newtv1-0.13.0-arm64.dmg` is an Apple Silicon development build, not Apple-notarized. The packaging script uses the architecture and version of the supplied app; public releases still require Developer ID signing and notarization.
 
 ## First run
 

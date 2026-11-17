@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import Newtv1Core
 import AppKit
 import UniformTypeIdentifiers
@@ -126,7 +127,7 @@ final class BrowserAgent: ObservableObject {
                 }
             }
             do {
-                guard let key = try KeychainStore.load(provider: model.aiProvider) else { throw CommandError.invalid("Save an API key in Settings.") }
+                let key = try await model.aiCredential(for: model.aiProvider)
                 let step = try await OpenAIBrain(provider: model.aiProvider).browserStep(goal, snapshot: snapshot, log: log, model: model.aiModel, key: key, preferences: model.responsePreferences)
                 try Task.checkCancellation(); guard generation == token else { return }
                 explanation = step.explanation
