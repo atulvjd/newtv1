@@ -74,6 +74,8 @@ final class AppModel: ObservableObject {
     @Published var brainAnswers: [BrainAnswer] = []
     @Published var assistantMode: AssistantMode { didSet { UserDefaults.standard.set(assistantMode.rawValue, forKey: "assistantMode"); speech.stop(); speaker.stop() } }
     @Published var automaticLanguage: Bool { didSet { UserDefaults.standard.set(automaticLanguage, forKey: "automaticLanguage"); speech.stop() } }
+    @Published private(set) var testingSpeech = false
+    @Published private(set) var voiceTestTranscript = ""
     @Published var continuousListening: Bool {
         didSet { UserDefaults.standard.set(continuousListening, forKey: "continuousListening"); speech.stop() }
     }
@@ -265,7 +267,7 @@ final class AppModel: ObservableObject {
             }
         }
         speech.onUtterance = { [weak self] text in self?.receiveVoice(text) }
-        speech.onFailure = { [weak self] message in self?.error = message; self?.voiceTaskID = nil }
+        speech.onFailure = { [weak self] message in self?.error = message; self?.voiceTaskID = nil; self?.testingSpeech = false }
         hotkey.onToggle = { [weak self] in Task { @MainActor in self?.hotkeyDown() } }
         hotkey.onRelease = { [weak self] in Task { @MainActor in self?.hotkeyUp() } }
         hotkeyAvailable = hotkey.register()
@@ -334,14 +336,25 @@ final class AppModel: ObservableObject {
         startListening(hold: false)
     }
 
-    private func startListening(hold: Bool) {
+    func testSpeech() {
+        cancelListening()
+        voiceTestTranscript = ""
+        startListening(hold: false, testing: true)
+    }
+
+    func stopSpeechTest() {
+        if testingSpeech { cancelListening() }
+    }
+
+    private func startListening(hold: Bool, testing: Bool = false) {
             guard !speechStarting else { return }
             guard !busy, pending == nil else {
                 error = "Finish or stop the current task before starting another voice request."
                 return
             }
             error = nil
-            if assistantMode == .dictate, !AXIsProcessTrusted() {
+            testingSpeech = testing
+            if !testing, assistantMode == .dictate, !AXIsProcessTrusted() {
                 accessibilityIssue = true; error = "Dictation needs Mac control access to type into another app."; openCommandCenter(page: .settings); return
             }
             if automaticLanguage, !aiProvider.supportsTranscription { error = "ChatGPT sign-in uses Apple speech recognition. Turn off Automatic language recognition in Settings → Voice."; return }
@@ -358,9 +371,9 @@ final class AppModel: ObservableObject {
             speech.wakePhrases = VoiceCommand.recognitionPhrases(custom: customWakePhrase)
             speech.localeIdentifier = speechLocale
             speech.vocabulary = vocabulary.components(separatedBy: .newlines).map { String($0.prefix(80)) }.filter { !$0.isEmpty }
-            speech.dictation = assistantMode == .dictate
+            speech.dictation = !testing && assistantMode == .dictate
             speech.submitsOnPause = !hold
-            speech.continuousListening = assistantMode == .dictate || continuousListening
+            speech.continuousListening = !testing && (assistantMode == .dictate || continuousListening)
             speech.silenceDuration = speechPauseDuration
             let startID = UUID()
             speechStartID = startID
@@ -381,6 +394,7 @@ final class AppModel: ObservableObject {
         speechStartTask = nil
         speechStarting = false
         armedByHotkey = false
+        testingSpeech = false
         speech.stop()
     }
 
@@ -413,6 +427,12 @@ final class AppModel: ObservableObject {
     }
 
     func receiveVoice(_ raw: String) {
+        if testingSpeech {
+            testingSpeech = false
+            voiceTestTranscript = raw
+            armedByHotkey = false
+            return
+        }
         if assistantMode == .dictate {
             if DictationControl.shouldStop(raw, custom: customWakePhrase) { speech.stop(); return }
             guard !busy, pending == nil else { return }

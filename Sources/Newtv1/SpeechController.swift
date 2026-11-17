@@ -30,6 +30,9 @@ final class SpeechController: ObservableObject {
     private var monitor: Timer?
     private var restartTask: Task<Void, Never>?
     private var finalTimeout: Task<Void, Never>?
+    private var recoveryTask: Task<Void, Never>?
+    private var recordings: [URL] = []
+    private var audioStarted: TimeInterval?
     private var endpoint = SpeechEndpoint(now: ProcessInfo.processInfo.systemUptime)
     private var startToken = UUID()
     private var generation = UUID()
@@ -93,6 +96,7 @@ final class SpeechController: ObservableObject {
     }
 
     private func resetUtterance() {
+        removeRecordings()
         endpoint = SpeechEndpoint(silenceDuration: silenceDuration, now: now, usesSpeechClassification: true)
         isTranscribing = false
         committedText = ""
@@ -110,6 +114,7 @@ final class SpeechController: ObservableObject {
         generation = token
         segmentStarted = now
         lastAudioSample = now
+        audioStarted = nil
         segmentText = ""
         rotating = false
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -119,11 +124,39 @@ final class SpeechController: ObservableObject {
         request.taskHint = .dictation
         request.contextualStrings = Array((wakePhrases + vocabulary + ["show numbers", "left half", "right half", "run focus mode"]).prefix(100))
         self.request = request
+        // Attach the recognizer before the microphone starts delivering buffers.
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor [weak self] in
+                guard let self, self.isListening, self.generation == token else { return }
+                if let result {
+                    let text = result.bestTranscription.formattedString
+                    if let start = self.audioStarted, let last = result.bestTranscription.segments.last,
+                       last.duration > 0 {
+                        self.endpoint.recognizedSpeech(through: start + last.timestamp + last.duration)
+                    }
+                    if !text.isEmpty, text != self.segmentText {
+                        self.segmentText = text
+                        self.transcript = self.joinedText
+                        if !text.isEmpty { self.endpoint.transcriptChanged(now: self.now) }
+                    }
+                    if result.isFinal {
+                        if self.finishing { self.completeUtterance() }
+                        else { self.commitAndContinue() }
+                        return
+                    }
+                }
+                if let error {
+                    if self.finishing { self.recoverFinalResult() }
+                    else { self.fail(self.recognitionError(error)) }
+                }
+            }
+        }
         do {
-            try capture.start(recording: false, onBuffer: { buffer in request.append(buffer) },
+            try capture.start(recording: true, onBuffer: { buffer in request.append(buffer) },
                 onSample: { [weak self] power, rms, timestamp in
                     Task { @MainActor [weak self] in
                         guard let self, self.isCapturing, self.generation == token, !self.rotating else { return }
+                        if self.audioStarted == nil { self.audioStarted = timestamp }
                         self.lastAudioSample = timestamp
                         self.level = min(1, rms * 8)
                         self.endpoint.observe(powerDB: power, now: timestamp)
@@ -141,28 +174,6 @@ final class SpeechController: ObservableObject {
                 })
         } catch { fail("Microphone or voice detection could not start: " + error.localizedDescription); return }
         status = "Listening · pause for \(String(format: "%.1f", silenceDuration)) seconds to send"
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self, self.isListening, self.generation == token else { return }
-                if let result {
-                    let text = result.bestTranscription.formattedString
-                    if !text.isEmpty, text != self.segmentText {
-                        self.segmentText = text
-                        self.transcript = self.joinedText
-                        if !text.isEmpty { self.endpoint.transcriptChanged(now: self.now) }
-                    }
-                    if result.isFinal {
-                        if self.finishing { self.completeUtterance() }
-                        else { self.commitAndContinue() }
-                        return
-                    }
-                }
-                if error != nil {
-                    if self.finishing || self.rotating { self.fail("Speech recognition ended before finalizing your words. Your partial request is on screen. Try again.") }
-                    else { self.fail("Speech recognition was interrupted. Your partial request was kept on screen. Check your microphone and try again.") }
-                }
-            }
-        }
     }
 
     private var joinedText: String {
@@ -218,12 +229,15 @@ final class SpeechController: ObservableObject {
         restartTask?.cancel()
         isTranscribing = true
         status = "Microphone off · finishing transcription…"
+        // A final result can arrive just before Send now, between recognition
+        // segments. Its task has already been torn down and cannot finalize again.
+        if request == nil, !committedText.isEmpty { completeUtterance(); return }
         endAudio()
         awaitFinalResult()
     }
 
     private func endAudio() {
-        capture.discard()
+        recordings.append(contentsOf: capture.finish())
         level = 0
         request?.endAudio()
     }
@@ -234,8 +248,51 @@ final class SpeechController: ObservableObject {
         finalTimeout = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: self?.allowNetwork == true ? 8_000_000_000 : 3_000_000_000) } catch { return }
             guard let self, self.isListening, self.generation == token else { return }
-            self.fail("Speech recognition took too long to finalize. Your partial request is on screen. Check your recognition language and try again.")
+            if self.finishing { self.recoverFinalResult() }
+            else { self.fail("Apple speech recognition stopped during a long request. Your partial transcript is on screen; try a shorter request.") }
         }
+    }
+
+    private func recoverFinalResult() {
+        guard recoveryTask == nil, let recognizer, !recordings.isEmpty else {
+            if recoveryTask == nil { fail("No audio was available to finish transcription. Check your microphone input in Settings → Voice.") }
+            return
+        }
+        generation = UUID()
+        finalTimeout?.cancel(); finalTimeout = nil
+        recognitionTask?.cancel(); recognitionTask = nil
+        request = nil
+        status = allowNetwork ? "Microphone off · recovering transcription…" : "Microphone off · recovering transcription locally…"
+        let token = generation, files = recordings
+        let allowNetwork = allowNetwork, vocabulary = wakePhrases + vocabulary, dictation = dictation
+        recoveryTask = Task { [weak self] in
+            do {
+                var parts: [String] = []
+                for file in files {
+                    try Task.checkCancellation()
+                    let text = try await SpeechFileTranscriber().transcribe(file, recognizer: recognizer,
+                        allowNetwork: allowNetwork, vocabulary: vocabulary, dictation: dictation)
+                    parts.append(text)
+                }
+                guard let self, self.isListening, self.generation == token, !Task.isCancelled else { return }
+                self.recoveryTask = nil
+                self.deliver(parts.joined(separator: " "))
+            } catch {
+                guard let self, self.isListening, self.generation == token, !Task.isCancelled else { return }
+                self.recoveryTask = nil
+                self.fail(self.recognitionError(error))
+            }
+        }
+    }
+
+    private func recognitionError(_ error: Error) -> String {
+        let detail = error as NSError
+        return "Apple speech recognition: \(detail.localizedDescription) (\(detail.domain) \(detail.code)). Your partial transcript is on screen. Check the input and recognition language in Settings → Voice."
+    }
+
+    private func removeRecordings() {
+        for file in recordings { try? FileManager.default.removeItem(at: file) }
+        recordings.removeAll()
     }
 
     private func completeUtterance() {
@@ -276,6 +333,8 @@ final class SpeechController: ObservableObject {
         monitor?.invalidate()
         monitor = nil
         tearDownSegment()
+        recoveryTask?.cancel(); recoveryTask = nil
+        removeRecordings()
         finishing = false
         rotating = false
         level = 0

@@ -67,6 +67,15 @@ public struct SpeechEndpoint {
         if lastVoice == nil { lastVoice = min(now, previousSample) }
     }
 
+    /// Recognizer word timings refer to captured audio, rather than delivery time.
+    /// This rescues quiet speech missed by sound classification without allowing
+    /// late punctuation/partial callbacks to keep a silent microphone open.
+    public mutating func recognizedSpeech(through: TimeInterval) {
+        guard through.isFinite, through >= startedAt, through <= previousSample else { return }
+        hasSpeech = true
+        lastVoice = max(lastVoice ?? through, through)
+    }
+
     public func state(now: TimeInterval) -> State {
         if now - startedAt >= 180 { return .durationLimit }
         guard hasSpeech else { return now - startedAt >= 12 ? .idleTimeout : .waiting }

@@ -246,6 +246,7 @@ struct CompanionPreferences: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 17) {
             Label("Listening & voice", systemImage: "waveform").font(.system(size: 18, weight: .semibold))
+            VoiceCheckView(model: model, speech: model.speech, system: model.automation.system)
             Toggle("Keep listening for more requests", isOn: $model.continuousListening)
             Text("Off captures one request and stops the microphone before running it. Dictate mode continues until you stop it. Continuous listening uses your wake phrase.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
             HStack {

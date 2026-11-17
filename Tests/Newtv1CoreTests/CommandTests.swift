@@ -868,6 +868,23 @@ final class CommandTests {
         classified.observeSpeech(probability: 0.95, through: 3) // stale queued result
         classified.observeSpeech(probability: .nan, through: 6)
         XCTAssertEqual(classified.state(now: 6.13), .finished)
+
+        // Quiet words can rescue classifier misses, using their audio end time.
+        var quiet = SpeechEndpoint(now: 0, usesSpeechClassification: true)
+        for sample in 1...40 {
+            let time = Double(sample) / 10
+            quiet.observe(powerDB: -58, now: time)
+            quiet.observeSpeech(probability: 0.1, through: time)
+        }
+        quiet.recognizedSpeech(through: 3.8)
+        XCTAssertEqual(quiet.state(now: 4), .pausing)
+        XCTAssertEqual(quiet.state(now: 5.79), .pausing)
+        quiet.transcriptChanged(now: 5.8) // late punctuation doesn't add voice
+        XCTAssertEqual(quiet.state(now: 5.81), .finished)
+        quiet.recognizedSpeech(through: 3) // older hypothesis must not rewind
+        quiet.recognizedSpeech(through: 99) // invalid future audio must not latch
+        quiet.recognizedSpeech(through: .nan)
+        XCTAssertEqual(quiet.state(now: 5.81), .finished)
     }
 
     func testGeminiProviderTranslation() throws {

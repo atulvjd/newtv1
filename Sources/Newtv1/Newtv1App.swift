@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 
-@main
 struct Newtv1App: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
