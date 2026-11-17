@@ -1,11 +1,12 @@
 import Foundation
 
 public enum AIProvider: String, Codable, CaseIterable, Identifiable {
-    case openAI = "openai", gemini
+    case openAI = "openai", gemini, chatGPT = "chatgpt"
     public var id: String { rawValue }
-    public var title: String { self == .gemini ? "Gemini" : "OpenAI" }
-    public var defaultModel: String { self == .gemini ? "gemini-2.5-flash" : "gpt-5.4-mini" }
-    public var keyFlag: String { self == .gemini ? "geminiKeyConfigured" : "openAIKeyConfigured" }
+    public var title: String { self == .chatGPT ? "ChatGPT account" : self == .gemini ? "Gemini" : "OpenAI API" }
+    public var defaultModel: String { self == .chatGPT ? "" : self == .gemini ? "gemini-2.5-flash" : "gpt-5.4-mini" }
+    public var keyFlag: String { self == .chatGPT ? "chatGPTConnected" : self == .gemini ? "geminiKeyConfigured" : "openAIKeyConfigured" }
+    public var supportsTranscription: Bool { self != .chatGPT }
 }
 
 /// Converts Newt's shared prompt/schema envelope to Gemini's native REST format.

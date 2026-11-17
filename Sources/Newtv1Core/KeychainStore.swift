@@ -21,6 +21,7 @@ public enum KeychainStore {
     private static func query(_ provider: AIProvider) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.newtv1.mac." + provider.rawValue, kSecAttrAccount as String: account] }
 
     public static func save(_ raw: String, trustedApp: String? = nil, provider: AIProvider = .openAI) throws {
+        guard provider != .chatGPT else { throw CommandError.invalid("Use Continue with ChatGPT instead of pasting an API key.") }
         cacheLock.lock()
         defer { cacheLock.unlock() }
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -46,6 +47,7 @@ public enum KeychainStore {
     }
 
     public static func load(provider: AIProvider = .openAI) throws -> String? {
+        guard provider != .chatGPT else { throw CommandError.invalid("Connect your ChatGPT account in Settings → AI.") }
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached = cachedKey(provider) { return cached }
