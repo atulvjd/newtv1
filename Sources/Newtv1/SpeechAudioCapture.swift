@@ -66,6 +66,7 @@ final class SpeechAudioStream {
     private var recordings: [URL] = []
     private var closed = false
     private var failed = false
+    private var lastMeterSample = -Double.infinity
 
     init(format: AVAudioFormat, recording: Bool, startedAt: TimeInterval,
          onSample: @escaping (Double, Float, TimeInterval) -> Void,
@@ -99,7 +100,12 @@ final class SpeechAudioStream {
                 var sum: Float = 0
                 for index in 0..<Int(copy.frameLength) { sum += channel[index] * channel[index] }
                 let rms = sqrt(sum / Float(copy.frameLength))
-                onSample(Double(20 * log10(max(rms, 0.00001))), rms, timestamp)
+                // Retain all audio for recognition/classification, but bound UI
+                // meter work to 20 Hz instead of scheduling every tap buffer.
+                if timestamp - lastMeterSample >= 0.05 {
+                    onSample(Double(20 * log10(max(rms, 0.00001))), rms, timestamp)
+                    lastMeterSample = timestamp
+                }
             }
             do { try convert(copy) }
             catch { failed = true; onFailure("Microphone recording could not be saved. Try again."); return }

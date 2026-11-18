@@ -16,7 +16,7 @@ final class CloudSpeechRecorder {
     private let capture = SpeechAudioCapture()
     private var recording = false
     private var lastAudioSample = 0.0
-    private var timer: Timer?
+    private var timer: Task<Void, Never>?
     private var segments: [URL] = []
     private var endpoint = SpeechEndpoint(now: ProcessInfo.processInfo.systemUptime)
     private var running = false
@@ -59,8 +59,12 @@ final class CloudSpeechRecorder {
         lastAudioSample = now
         onTranscribing?(false)
         onStatus?("Listening · pause for \(String(format: "%.1f", silenceDuration)) seconds to send")
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.tick() }
+        timer = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+                guard let self, self.running, self.recording else { return }
+                self.tick()
+            }
         }
     }
 
@@ -92,7 +96,7 @@ final class CloudSpeechRecorder {
 
     private func closeRecording() {
         recording = false
-        timer?.invalidate()
+        timer?.cancel()
         timer = nil
         segments += capture.finish()
         onLevel?(0)
@@ -156,7 +160,7 @@ final class CloudSpeechRecorder {
         generation = UUID()
         task?.cancel()
         task = nil
-        timer?.invalidate()
+        timer?.cancel()
         timer = nil
         recording = false
         capture.discard()

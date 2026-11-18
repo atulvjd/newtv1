@@ -241,8 +241,10 @@ private struct TaskConversationView: View {
 struct CompanionPreferences: View {
     @ObservedObject var model: AppModel
     @AppStorage("spokenCaptions") private var spokenCaptions = true
-    private var languages: [String] { SFSpeechRecognizer.supportedLocales().map(\.identifier).sorted() }
-    private var voices: [AVSpeechSynthesisVoice] { AVSpeechSynthesisVoice.speechVoices().sorted { $0.language == $1.language ? $0.name < $1.name : $0.language < $1.language } }
+    // Microphone levels redraw the workspace frequently. These system queries
+    // can synchronously wait on speech services and must not run on every frame.
+    private static let languages = SFSpeechRecognizer.supportedLocales().map(\.identifier).sorted()
+    private static let voices = AVSpeechSynthesisVoice.speechVoices().sorted { $0.language == $1.language ? $0.name < $1.name : $0.language < $1.language }
     var body: some View {
         VStack(alignment: .leading, spacing: 17) {
             Label("Listening & voice", systemImage: "waveform").font(.system(size: 18, weight: .semibold))
@@ -262,14 +264,14 @@ struct CompanionPreferences: View {
             Toggle("Show live captions for spoken replies", isOn: $spokenCaptions)
             Toggle("Hold Option–Space to talk; release to send", isOn: $model.pushToTalk)
             Picker("Recognition language", selection: $model.speechLocale) {
-                ForEach(languages, id: \.self) { locale in Text(Locale.current.localizedString(forIdentifier: locale) ?? locale).tag(locale) }
-                if !languages.contains(model.speechLocale) { Text(model.speechLocale).tag(model.speechLocale) }
+                ForEach(Self.languages, id: \.self) { locale in Text(Locale.current.localizedString(forIdentifier: locale) ?? locale).tag(locale) }
+                if !Self.languages.contains(model.speechLocale) { Text(model.speechLocale).tag(model.speechLocale) }
             }
             Text("Apple language support varies. Network recognition is opt-in. Changing language or vocabulary stops listening.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
             Text("Custom vocabulary · one term per line").font(.system(size: 12))
             TextEditor(text: $model.vocabulary).font(.system(size: 12, design: .monospaced)).frame(height: 75).scrollContentBackground(.hidden).padding(8).background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
             Toggle("Read answers aloud using a Mac voice", isOn: $model.speakAnswers)
-            Picker("Voice", selection: $model.voiceID) { Text("System default").tag(""); ForEach(voices, id: \.identifier) { voice in Text("\(voice.name) · \(voice.language)").tag(voice.identifier) } }
+            Picker("Voice", selection: $model.voiceID) { Text("System default").tag(""); ForEach(Self.voices, id: \.identifier) { voice in Text("\(voice.name) · \(voice.language)").tag(voice.identifier) } }
             HStack { Text("Speaking speed"); Slider(value: $model.voiceRate, in: 0.3...0.65); Button("Preview voice") { model.speakAnswer("Hi, I'm Newt. What would you like to do?") }.buttonStyle(WorkspaceButtonStyle()) }
             Text("Recognition pauses during playback, then resumes if it was already listening. Press the talk shortcut to interrupt speech. Spoken playback itself stays on this Mac.").font(.system(size: 11)).foregroundStyle(WorkspaceTheme.secondary)
             DisclosureGroup("Response style") {

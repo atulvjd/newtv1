@@ -849,6 +849,7 @@ final class CommandTests {
             classified.observeSpeech(probability: 0.01, through: time)
         }
         XCTAssertFalse(classified.hasSpeech)
+        classified.observe(powerDB: -30, now: 2.1)
         classified.observeSpeech(probability: 0.9, through: 2.1)
         XCTAssertEqual(classified.state(now: 2.1), .speaking)
         for sample in 22...40 {
@@ -860,6 +861,7 @@ final class CommandTests {
         classified.transcriptChanged(now: 4.05)
         XCTAssertEqual(classified.state(now: 4.11), .finished)
         // Resuming before two seconds extends the deadline using the audio timestamp.
+        classified.observe(powerDB: -30, now: 4.12)
         classified.observeSpeech(probability: 0.95, through: 4.12)
         XCTAssertEqual(classified.state(now: 4.12), .speaking)
         classified.observeSpeech(probability: 0, through: 4.3)
@@ -881,10 +883,41 @@ final class CommandTests {
         XCTAssertEqual(quiet.state(now: 5.79), .pausing)
         quiet.transcriptChanged(now: 5.8) // late punctuation doesn't add voice
         XCTAssertEqual(quiet.state(now: 5.81), .finished)
+
+        // Mislabelled silent windows must not latch "speaking" indefinitely.
+        var muted = SpeechEndpoint(now: 0, usesSpeechClassification: true)
+        muted.observe(powerDB: -30, now: 0.1)
+        muted.observeSpeech(probability: 0.95, through: 0.1)
+        for sample in 2...22 {
+            let time = Double(sample) / 10
+            muted.observe(powerDB: -100, now: time)
+            muted.observeSpeech(probability: 0.95, through: time)
+        }
+        XCTAssertEqual(muted.state(now: 2.2), .finished)
         quiet.recognizedSpeech(through: 3) // older hypothesis must not rewind
         quiet.recognizedSpeech(through: 99) // invalid future audio must not latch
         quiet.recognizedSpeech(through: .nan)
         XCTAssertEqual(quiet.state(now: 5.81), .finished)
+    }
+
+    func testSingleAppSession() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("session.lock")
+        var first: ProcessSessionLock? = try ProcessSessionLock(url: path)
+        XCTAssertTrue(first?.acquired == true)
+        let second = try ProcessSessionLock(url: path)
+        XCTAssertFalse(second.acquired)
+        first = nil
+        let recovered = try ProcessSessionLock(url: path)
+        XCTAssertTrue(recovered.acquired)
+        try withExtendedLifetime(recovered) {
+            XCTAssertFalse(try ProcessSessionLock(url: path).acquired)
+        }
+        let link = folder.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: path)
+        XCTAssertThrowsError(try ProcessSessionLock(url: link))
     }
 
     func testGeminiProviderTranslation() throws {
@@ -1127,6 +1160,7 @@ struct CoreChecks {
     static func main() {
         let suite = CommandTests()
         let cases: [(String, () throws -> Void)] = [
+            ("single app session exclusion and release", suite.testSingleAppSession),
             ("chained commands", suite.testChainedCommands),
             ("literal text boundaries", suite.testLiteralTextCannotBecomeActions),
             ("Unicode preservation", suite.testPreservesCaseAndUnicode),

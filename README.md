@@ -2,6 +2,10 @@
 
 A native macOS voice control app built with SwiftUI, Speech, Accessibility, and Quartz. No JavaScript runtime, cloud account, or API key required for the built-in commands.
 
+Version **0.13.2** prevents duplicate app sessions. Opening another development, installed or DMG copy activates the running copy instead of registering a second voice shortcut. A per-user process lock is acquired before services start and released automatically on exit or crash. Quit the running version before launching an updated build.
+
+Version **0.13.1** improves Apple speech capture: recognition is attached before microphone audio arrives, word audio timestamps can rescue quiet speech missed by classification, and a stalled final result gets one bounded second pass over temporary local WAV files. Sound classifications cannot extend the timer over digital silence. The pause clock uses monotonic tasks instead of window run-loop timers, microphone UI updates are bounded, and installed voices/languages are cached. Audio stays on this Mac unless Apple network recognition was explicitly enabled. Temporary recordings are removed when the request completes or is cancelled. Failed or incomplete recognition is never automatically executed. **Settings → Voice → Voice check** shows the active microphone, input level and recognized sentence without running commands. **Check recognition engine** uses generated local audio without opening the microphone. Turn **Keep listening for more requests** off for one request followed by microphone shutdown after the configured pause (normally two seconds).
+
 ## Workspace
 
 Version 0.11 brings a consistent charcoal-and-mint workspace, clearer typography, shared buttons and focused text fields, grouped navigation with page search, and pinned Settings and Command library controls. **Newt** is the main voice and text workspace, with compact mode selection and suggestions that fill a draft. Utilities use an adaptive card grid; task conversations and advanced browser setup expand when needed. Notch Studio retains your chosen notch colors and live preview.
@@ -132,7 +136,7 @@ bash scripts/build-dmg.sh
 
 This builds the release app and creates `dist/Newtv1-VERSION-ARCH.dmg` with a SHA-256 checksum beside it. Use `bash scripts/build-dmg.sh --skip-build` to package an existing verified `dist/Newtv1.app` without rebuilding or changing its signature. The image includes the app, an Applications shortcut, installation instructions, and optional browser integration files. The packager verifies the disk-image checksum, mounts it read-only, checks the bundled app signature and file contents, then ejects it.
 
-Open the DMG and drag **Newtv1.app** to **Applications**. Copy optional browser integration files to a permanent location before loading the extension; setup instructions are included under Extras. Keys, credentials, conversations, and personal preferences are not packaged. The current `Newtv1-0.13.0-arm64.dmg` is an Apple Silicon development build, not Apple-notarized. The packaging script uses the architecture and version of the supplied app; public releases still require Developer ID signing and notarization.
+Open the DMG and drag **Newtv1.app** to **Applications**. Quit any copy running directly from the DMG before opening the installed copy, so multiple versions do not compete for the microphone and shortcut. Copy optional browser integration files to a permanent location before loading the extension; setup instructions are included under Extras. Keys, credentials, conversations, and personal preferences are not packaged. The current `Newtv1-0.13.1-arm64.dmg` is an Apple Silicon development build, not Apple-notarized. The packaging script uses the architecture and version of the supplied app; public releases still require Developer ID signing and notarization.
 
 ## First run
 

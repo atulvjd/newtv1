@@ -19,7 +19,10 @@ struct VoiceCheckView: View {
                     if model.testingSpeech && speech.isListening { model.stopSpeechTest() }
                     else { model.testSpeech() }
                 }.buttonStyle(WorkspaceButtonStyle())
-                    .disabled(model.busy || model.pending != nil || model.capturingScreen || model.speechStarting || (speech.isListening && !model.testingSpeech))
+                    .disabled(model.busy || model.pending != nil || model.capturingScreen || model.speechStarting || speech.checkingEngine || (speech.isListening && !model.testingSpeech))
+                Button(speech.checkingEngine ? "Checking engine…" : "Check recognition engine") {
+                    speech.checkRecognitionEngine(locale: model.speechLocale)
+                }.buttonStyle(WorkspaceButtonStyle()).disabled(speech.isListening || model.speechStarting || speech.checkingEngine)
                 if model.testingSpeech && speech.isCapturing {
                     ProgressView(value: Double(speech.level)).frame(width: 100).accessibilityLabel("Microphone input level")
                 }
@@ -28,6 +31,9 @@ struct VoiceCheckView: View {
                 Text(speech.status).foregroundStyle(WorkspaceTheme.secondary)
                 Text(model.voiceTestTranscript.isEmpty ? speech.transcript : model.voiceTestTranscript)
                     .foregroundStyle(WorkspaceTheme.accent).textSelection(.enabled)
+            }
+            if !speech.engineCheckResult.isEmpty {
+                Text(speech.engineCheckResult).foregroundStyle(WorkspaceTheme.secondary).textSelection(.enabled)
             }
         }.font(.system(size: 12)).padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

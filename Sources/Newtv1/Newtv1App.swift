@@ -39,12 +39,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktop: NotchController?
     private var captions: CaptionController?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(revealExistingInstance), name: SingleAppSession.revealNotification, object: nil)
         NSApp.setActivationPolicy(.accessory)
         let desktop = NotchController(model: model)
         self.desktop = desktop
         model.onOpenCommandCenter = { [weak desktop] in desktop?.openCommandCenter() }
         captions = CaptionController(speaker: model.speaker)
         desktop.start()
+    }
+    @objc private func revealExistingInstance() {
+        model.openCommandCenter()
+        NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -11,6 +11,7 @@ public struct SpeechEndpoint {
     private var candidateDuration: TimeInterval = 0
     private var lastVoice: TimeInterval?
     private var lastClassification: TimeInterval?
+    private var lastAudibleSample: TimeInterval?
     private var classifiedVoice = false
     private let usesSpeechClassification: Bool
     private var voiceActive = false
@@ -27,6 +28,7 @@ public struct SpeechEndpoint {
         guard now.isFinite, powerDB.isFinite, now >= previousSample else { return }
         let elapsed = min(0.2, now - previousSample)
         previousSample = now
+        if powerDB > -70 { lastAudibleSample = now }
         let threshold = min(-28, max(-52, noiseFloor + 10))
         let voiced = powerDB > threshold - (voiceActive ? 4 : 0)
         if voiced {
@@ -53,10 +55,14 @@ public struct SpeechEndpoint {
         guard usesSpeechClassification, probability.isFinite, through.isFinite,
               through >= startedAt, through >= (lastClassification ?? startedAt) else { return }
         lastClassification = through
-        classifiedVoice = probability >= (classifiedVoice ? 0.25 : 0.4)
+        // A speech label cannot keep capture alive over digital silence or a
+        // muted input. Classifier windows may still include earlier speech.
+        let audible = lastAudibleSample.map { through - $0 <= 0.5 && through >= $0 - 0.5 } ?? false
+        classifiedVoice = audible && probability >= (classifiedVoice ? 0.25 : 0.4)
         if classifiedVoice {
             hasSpeech = true
-            lastVoice = max(lastVoice ?? through, through)
+            let voiceEnd = min(through, lastAudibleSample ?? through)
+            lastVoice = max(lastVoice ?? voiceEnd, voiceEnd)
         }
     }
 

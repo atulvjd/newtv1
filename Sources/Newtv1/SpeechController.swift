@@ -11,6 +11,8 @@ final class SpeechController: ObservableObject {
     @Published var transcript = ""
     @Published var level: Float = 0
     @Published var status = "Microphone off"
+    @Published private(set) var checkingEngine = false
+    @Published private(set) var engineCheckResult = ""
     var onUtterance: ((String) -> Void)?
     var onFailure: ((String) -> Void)?
     var wakePhrases = ["Newt", "New", "Hey Newt", "Hey New"]
@@ -27,10 +29,11 @@ final class SpeechController: ObservableObject {
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var monitor: Timer?
+    private var monitor: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var finalTimeout: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
+    private var engineCheckTask: Task<Void, Never>?
     private var recordings: [URL] = []
     private var audioStarted: TimeInterval?
     private var endpoint = SpeechEndpoint(now: ProcessInfo.processInfo.systemUptime)
@@ -46,8 +49,43 @@ final class SpeechController: ObservableObject {
     private var allowNetwork = false
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    func checkRecognitionEngine(locale: String) {
+        guard !isListening, !checkingEngine else { return }
+        checkingEngine = true
+        engineCheckResult = "Checking Apple's offline recognizer with generated audio…"
+        engineCheckTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.checkingEngine = false; self.engineCheckTask = nil }
+            let authorization = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            }
+            guard !Task.isCancelled else { return }
+            guard authorization == .authorized else {
+                self.engineCheckResult = "Speech Recognition permission is needed for this Newtv1 copy."
+                return
+            }
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+                  recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
+                self.engineCheckResult = "On-device recognition is unavailable for this language. Choose an installed recognition language."
+                return
+            }
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("newtv1-speech-check-\(UUID().uuidString).aiff")
+            defer { try? FileManager.default.removeItem(at: file) }
+            do {
+                _ = try await ProcessRunner().run("/usr/bin/say", ["-r", "160", "-o", file.path, "Newt, open Calculator."])
+                try Task.checkCancellation()
+                let text = try await SpeechFileTranscriber().transcribe(file, recognizer: recognizer,
+                    allowNetwork: false, vocabulary: wakePhrases + ["Calculator"], dictation: false)
+                try Task.checkCancellation()
+                self.engineCheckResult = "Apple offline recognition returned: “\(text)”. Use Voice check to test your microphone next."
+            } catch {
+                if !Task.isCancelled { self.engineCheckResult = self.recognitionError(error) }
+            }
+        }
+    }
+
     func start(allowNetwork: Bool) async {
-        guard !isListening else { return }
+        guard !isListening, !checkingEngine else { return }
         let token = UUID()
         startToken = token
         status = "Checking microphone…"
@@ -64,7 +102,7 @@ final class SpeechController: ObservableObject {
             cloud.continuousListening = continuousListening
             cloud.onText = { [weak self] text in self?.deliver(text) }
             cloud.onLevel = { [weak self] value in self?.level = value }
-            cloud.onStatus = { [weak self] message in self?.status = message }
+            cloud.onStatus = { [weak self] message in self?.setStatus(message) }
             cloud.onFailure = { [weak self] message in self?.fail(message) }
             cloud.onTranscribing = { [weak self] active in self?.isTranscribing = active }
             cloud.onFinished = { [weak self] in self?.stop() }
@@ -90,8 +128,12 @@ final class SpeechController: ObservableObject {
         resetUtterance()
         beginSegment()
         guard isListening else { return }
-        monitor = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.tick() }
+        monitor = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+                guard let self, self.isListening else { return }
+                self.tick()
+            }
         }
     }
 
@@ -158,7 +200,8 @@ final class SpeechController: ObservableObject {
                         guard let self, self.isCapturing, self.generation == token, !self.rotating else { return }
                         if self.audioStarted == nil { self.audioStarted = timestamp }
                         self.lastAudioSample = timestamp
-                        self.level = min(1, rms * 8)
+                        let level = min(1, rms * 8)
+                        if abs(self.level - level) >= 0.025 || (level == 0 && self.level != 0) { self.level = level }
                         self.endpoint.observe(powerDB: power, now: timestamp)
                     }
                 }, onSpeech: { [weak self] probability, timestamp in
@@ -191,9 +234,9 @@ final class SpeechController: ObservableObject {
         case .finished where submitsOnPause:
             finishUtterance()
         case .speaking:
-            status = "Hearing you…"
+            setStatus("Hearing you…")
         case .pausing:
-            status = "Waiting for you to finish…"
+            setStatus("Waiting for you to finish…")
         default:
             break
         }
@@ -295,6 +338,10 @@ final class SpeechController: ObservableObject {
         recordings.removeAll()
     }
 
+    private func setStatus(_ message: String) {
+        if status != message { status = message }
+    }
+
     private func completeUtterance() {
         let text = joinedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
@@ -330,10 +377,12 @@ final class SpeechController: ObservableObject {
         isListening = false
         isTranscribing = false
         cloud.stop()
-        monitor?.invalidate()
+        monitor?.cancel()
         monitor = nil
         tearDownSegment()
         recoveryTask?.cancel(); recoveryTask = nil
+        engineCheckTask?.cancel(); engineCheckTask = nil
+        checkingEngine = false
         removeRecordings()
         finishing = false
         rotating = false
